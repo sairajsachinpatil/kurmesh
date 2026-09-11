@@ -3,15 +3,15 @@ from datetime import UTC, datetime
 
 from flask import Blueprint, g, jsonify, request
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.auth import ApiError, authenticate, issue_token, password_hash, password_matches, require_roles
 from app.models import (Alert, AuditEvent, EnvironmentObservation, ModelVersion, Mission, MissionConstraint,
                         Prediction, ProvenanceRecord, Route, RouteApproval, RouteCandidate, RouteReview,
                         SimulationRun, User, Vessel)
-from app.repositories import MissionRepository, Repository, UserRepository
-from app.api.v1.schemas import (ApprovalRequest, ConstraintRequest, LoginRequest, MissionRequest,
+from app.repositories import MissionRepository, Repository, RoleRepository, UserRepository
+from app.api.v1.schemas import (ApprovalRequest, ConstraintRequest, LoginRequest, MissionCreateRequest, MissionUpdateRequest,
                                 MissionTransitionRequest, RegisterRequest, ReviewRequest, SimulationRequest,
                                 VesselRequest)
 
@@ -39,7 +39,7 @@ def page(query, model, filters=()):
 
 
 def serialize(value):
-    if isinstance(value, User): return {"id": str(value.id), "email": value.email, "is_active": value.is_active, "roles": [r.name for r in value.roles]}
+    if isinstance(value, User): return {"id": str(value.id), "email": value.email, "full_name": value.full_name, "is_active": value.is_active, "roles": [r.name for r in value.roles]}
     if isinstance(value, Vessel): return {"id": str(value.id), "name": value.name, "vessel_type": value.vessel_type, "imo_number": value.imo_number, "specifications": value.specifications}
     if isinstance(value, Mission): return {"id": str(value.id), "name": value.name, "state": value.state, "vessel_id": str(value.vessel_id) if value.vessel_id else None, "departure_at": value.departure_at.isoformat() if value.departure_at else None}
     if isinstance(value, MissionConstraint): return {"id": str(value.id), "mission_id": str(value.mission_id), "constraint_type": value.constraint_type, "value": value.value}
@@ -71,16 +71,22 @@ def commit():
 @api_blueprint.post("/auth/register")
 def register():
     data = body(RegisterRequest)
-    if UserRepository(g.db).by_email(str(data.email)):
+    email = str(data.email).strip().lower()
+    if UserRepository(g.db).by_email(email):
         raise ApiError("CONFLICT", "Email is already registered", 409)
-    user = User(email=str(data.email), password_hash=password_hash(data.password))
+    role_repository = RoleRepository(g.db)
+    default_role = role_repository.by_name("user")
+    if default_role is None:
+        default_role = Role(name="user")
+        role_repository.add(default_role)
+    user = User(email=email, full_name=data.full_name.strip(), password_hash=password_hash(data.password), roles=[default_role])
     g.db.add(user); commit(); audit("USER_REGISTERED", "User", user.id); commit()
     return jsonify({"user": serialize(user), "access_token": issue_token(user)}), 201
 
 
 @api_blueprint.post("/auth/login")
 def login():
-    data = body(LoginRequest); user = UserRepository(g.db).by_email(str(data.email))
+    data = body(LoginRequest); user = UserRepository(g.db).by_email(str(data.email).strip().lower())
     if user is None or not password_matches(user.password_hash, data.password) or not user.is_active:
         raise ApiError("INVALID_CREDENTIALS", "Invalid credentials", 401)
     g.current_user = user; audit("USER_LOGIN", "User", user.id); commit()
@@ -94,6 +100,21 @@ def users(): return page(select(User).order_by(User.created_at.desc()), User)
 
 @api_blueprint.get("/users/me")
 def current_user(): return jsonify(serialize(authenticate(g.db)))
+
+
+@api_blueprint.get("/auth/me")
+def auth_current_user(): return jsonify(serialize(authenticate(g.db)))
+
+
+@api_blueprint.get("/users/<uuid:user_id>")
+def user_by_id(user_id):
+    user = authenticate(g.db)
+    entity = g.db.get(User, user_id)
+    if entity is None:
+        raise ApiError("USER_NOT_FOUND", "User not found", 404)
+    if entity.id != user.id and "admin" not in {role.name for role in user.roles}:
+        raise ApiError("FORBIDDEN", "You are not authorized to view this user", 403)
+    return jsonify(serialize(entity))
 
 
 @api_blueprint.route("/vessels", methods=["GET", "POST"])
@@ -120,8 +141,18 @@ def missions():
     if request.method == "GET":
         query = select(Mission).order_by(Mission.created_at.desc())
         if state := request.args.get("state"): query = query.where(Mission.state == state)
-        return page(query, Mission)
-    data = body(MissionRequest); mission = Mission(**data.model_dump(), created_by_id=user.id); g.db.add(mission); commit(); audit("MISSION_CREATED", "Mission", mission.id); commit()
+        try:
+            page_number = max(int(request.args.get("page", 1)), 1)
+            page_size = min(max(int(request.args.get("page_size", 20)), 1), 100)
+        except ValueError:
+            raise ApiError("VALIDATION_ERROR", "page and page_size must be integers", 422) from None
+        total = g.db.scalar(select(func.count()).select_from(query.subquery())) or 0
+        rows = list(g.db.scalars(query.limit(page_size).offset((page_number - 1) * page_size)))
+        return jsonify({"items": [serialize(row) for row in rows], "page": page_number, "page_size": page_size, "total": total})
+    data = body(MissionCreateRequest)
+    if data.vessel_id is not None and g.db.get(Vessel, data.vessel_id) is None:
+        raise ApiError("VESSEL_NOT_FOUND", "Vessel not found", 404)
+    mission = Mission(**data.model_dump(), created_by_id=user.id); g.db.add(mission); commit(); audit("MISSION_CREATED", "Mission", mission.id); commit()
     return jsonify(serialize(mission)), 201
 
 
@@ -132,14 +163,17 @@ def mission(mission_id):
     if request.method == "GET": return jsonify(serialize(entity))
     if entity.created_by_id != user.id and "admin" not in {r.name for r in user.roles}: raise ApiError("FORBIDDEN", "Mission ownership is required", 403)
     if request.method == "DELETE": g.db.delete(entity); commit(); audit("MISSION_DELETED", "Mission", mission_id); commit(); return "", 204
-    for key, value in body(MissionRequest).model_dump(exclude_unset=True).items(): setattr(entity, key, value)
+    data = body(MissionUpdateRequest)
+    if data.vessel_id is not None and g.db.get(Vessel, data.vessel_id) is None:
+        raise ApiError("VESSEL_NOT_FOUND", "Vessel not found", 404)
+    for key, value in data.model_dump(exclude_unset=True).items(): setattr(entity, key, value)
     commit(); audit("MISSION_UPDATED", "Mission", mission_id); commit(); return jsonify(serialize(entity))
 
 
 @api_blueprint.post("/missions/<uuid:mission_id>/transition")
 def transition(mission_id):
     user = authenticate(g.db); entity = g.db.get(Mission, mission_id)
-    if entity is None: raise ApiError("NOT_FOUND", "Mission not found", 404)
+    if entity is None: raise ApiError("MISSION_NOT_FOUND", "Mission not found", 404)
     if entity.created_by_id != user.id and "admin" not in {role.name for role in user.roles}:
         raise ApiError("FORBIDDEN", "Mission ownership is required", 403)
     requested = body(MissionTransitionRequest).state

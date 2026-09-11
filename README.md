@@ -62,6 +62,14 @@ All API routes are under `/api/v1`. Health routes are public. The domain API has
 
 Mission mutations require the mission owner or an `admin` role. Mission state changes use the explicit state graph in the API. Route approval requires an `operator` or `admin`, an existing human review, and a different reviewer and approver. Audit events are created by mutations and have no write, update, or delete API endpoints.
 
+## Phase 3A API
+
+Phase 3A completes the authentication, user-profile, and mission API foundation. Register with `POST /api/v1/auth/register` using `email`, a password of at least 12 characters, and `full_name`; registration assigns the non-privileged `user` role. Authenticate with `POST /api/v1/auth/login`, then supply the returned token as `Authorization: Bearer <token>`.
+
+`GET /api/v1/auth/me` and `GET /api/v1/users/me` return the authenticated safe user profile. A user may retrieve their own `/api/v1/users/<uuid>` profile; `admin` may retrieve other profiles. Mission CRUD remains under `/api/v1/missions`; list responses accept `page` and `page_size` (maximum 100) and include pagination metadata. A referenced vessel must exist.
+
+Phase 3B remains out of scope: no ML, environmental providers, routing, simulation execution, or frontend domain workflows are implemented.
+
 ## Environment and safety
 
 Use `.env.example` only as a template; never commit `.env`. The provided password is deliberately a placeholder and fails Compose interpolation until replaced. Production requires a secrets manager, TLS/reverse proxy configuration, restricted CORS origins, backups, and authenticated API domains in later phases.

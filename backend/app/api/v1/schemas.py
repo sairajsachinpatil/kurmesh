@@ -12,10 +12,12 @@ class Payload(BaseModel):
 class RegisterRequest(Payload):
     email: EmailStr
     password: str = Field(min_length=12, max_length=128)
+    full_name: str = Field(min_length=1, max_length=200)
 
 
-class LoginRequest(RegisterRequest):
-    pass
+class LoginRequest(Payload):
+    email: EmailStr
+    password: str = Field(min_length=12, max_length=128)
 
 
 class VesselRequest(Payload):
@@ -25,8 +27,14 @@ class VesselRequest(Payload):
     specifications: dict[str, Any] = Field(default_factory=dict)
 
 
-class MissionRequest(Payload):
+class MissionCreateRequest(Payload):
     name: str = Field(min_length=1, max_length=200)
+    vessel_id: uuid.UUID | None = None
+    departure_at: datetime | None = None
+
+
+class MissionUpdateRequest(Payload):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
     vessel_id: uuid.UUID | None = None
     departure_at: datetime | None = None
 

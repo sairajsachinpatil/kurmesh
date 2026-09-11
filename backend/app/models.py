@@ -30,6 +30,7 @@ class User(Timestamped, Base):
     __tablename__ = "users"
     id: Mapped[uuid.UUID] = uuid_pk()
     email: Mapped[str] = mapped_column(String(320), unique=True, nullable=False, index=True)
+    full_name: Mapped[str | None] = mapped_column(String(200))
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
     roles: Mapped[list[Role]] = relationship(secondary="user_roles", back_populates="users")

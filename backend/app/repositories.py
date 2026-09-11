@@ -4,7 +4,7 @@ from typing import Generic, TypeVar
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Mission, User
+from app.models import Mission, Role, User
 
 ModelT = TypeVar("ModelT")
 
@@ -32,6 +32,14 @@ class UserRepository(Repository[User]):
 
     def by_email(self, email: str) -> User | None:
         return self.session.scalar(select(User).where(User.email == email))
+
+
+class RoleRepository(Repository[Role]):
+    def __init__(self, session: Session) -> None:
+        super().__init__(session, Role)
+
+    def by_name(self, name: str) -> Role | None:
+        return self.session.scalar(select(Role).where(Role.name == name))
 
 
 class MissionRepository(Repository[Mission]):
