@@ -90,7 +90,10 @@ class EnvironmentSource(Timestamped, Base):
 
 class EnvironmentObservation(Timestamped, Base):
     __tablename__ = "environment_observations"
-    __table_args__ = (Index("ix_environment_observation_validity", "valid_from", "valid_to"),)
+    __table_args__ = (
+        CheckConstraint("status IN ('LIVE','STALE','UNAVAILABLE','ERROR','DEGRADED')", name="ck_environment_observation_availability"),
+        Index("ix_environment_observation_validity", "valid_from", "valid_to"),
+    )
     id: Mapped[uuid.UUID] = uuid_pk()
     source_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("environment_sources.id"), nullable=False, index=True)
     observation_type: Mapped[str] = mapped_column(String(100), nullable=False)

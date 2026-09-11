@@ -58,3 +58,18 @@ def test_postgis_spatial_persistence_and_relationships():
     finally:
         session.rollback()
         session.close()
+
+
+@pytest.mark.integration
+def test_migration_downgrade_removes_only_kurmesh_schema_objects():
+    url = os.environ.get("KURMESH_INTEGRATION_DATABASE_URL")
+    if not url:
+        pytest.skip("KURMESH_INTEGRATION_DATABASE_URL is required for migration downgrade test")
+    result = subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], check=False, capture_output=True, text=True, env={**os.environ, "DATABASE_URL": url})
+    assert result.returncode == 0, result.stderr
+    result = subprocess.run([sys.executable, "-m", "alembic", "downgrade", "base"], check=False, capture_output=True, text=True, env={**os.environ, "DATABASE_URL": url})
+    assert result.returncode == 0, result.stderr
+    engine = create_engine(url)
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT to_regclass('public.missions')")).scalar_one() is None
+        assert connection.execute(text("SELECT PostGIS_Version()")).scalar_one()

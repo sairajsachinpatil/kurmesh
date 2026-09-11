@@ -1,21 +1,64 @@
-from flask import Flask
+from flask import Flask, g, jsonify, request
+from werkzeug.exceptions import HTTPException
 from flask_cors import CORS
 
 from app.api.v1.health import health_blueprint
+from app.api.v1.application import api_blueprint
+from app.auth import ApiError
 from app.config import Settings
+from app.database import build_session_factory
 from app.logging import configure_logging
 
 
 def create_app(settings: Settings | None = None) -> Flask:
     settings = settings or Settings.from_environment()
+    settings.validate()
     configure_logging(settings.log_level)
     app = Flask(__name__)
     app.config["KURMESH_SETTINGS"] = settings
+    app.config["KURMESH_SESSION_FACTORY"] = build_session_factory(settings.database_url)
     CORS(app, resources={r"/api/*": {"origins": settings.cors_origins}})
     app.register_blueprint(health_blueprint, url_prefix="/api/v1/health")
 
+    @app.before_request
+    def open_database_session() -> None:
+        # Flask does not assign request.blueprint for a method-mismatch (405),
+        # even when the request targets a blueprint rule. Route by the stable
+        # API prefix so every application API request receives the same scoped
+        # session, while dependency-free health probes remain session-free.
+        if request.path.startswith("/api/v1/") and not request.path.startswith("/api/v1/health"):
+            g.db = app.config["KURMESH_SESSION_FACTORY"]()
+
+    @app.teardown_request
+    def close_database_session(error: BaseException | None) -> None:
+        session = g.pop("db", None)
+        if session is None:
+            return
+        if error is not None:
+            session.rollback()
+        session.close()
+
+    @app.errorhandler(ApiError)
+    def api_error(error: ApiError):
+        return jsonify({"error": {"code": error.code, "message": error.message}}), error.status
+
+    @app.errorhandler(HTTPException)
+    def http_error(error: HTTPException):
+        if request.path.startswith("/api/"):
+            return jsonify({"error": {"code": error.name.upper().replace(" ", "_"), "message": error.description}}), error.code
+        return error
+
+    @app.errorhandler(Exception)
+    def unexpected_error(error: Exception):
+        if request.path.startswith("/api/"):
+            app.logger.exception("Unhandled API error")
+            return jsonify({"error": {"code": "INTERNAL_ERROR", "message": "An unexpected server error occurred"}}), 500
+        raise error
+
+    app.register_blueprint(api_blueprint, url_prefix="/api/v1")
+
     @app.get("/api/v1")
     def api_root() -> dict[str, str]:
-        return {"service": "kurmesh-api", "version": "v1", "status": "INFRASTRUCTURE_ONLY"}
+        return {"service": "kurmesh-api", "version": "v1", "status": "FOUNDATION"}
 
     return app

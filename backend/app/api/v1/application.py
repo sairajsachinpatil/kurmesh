@@ -27,8 +27,11 @@ def body(schema):
 
 
 def page(query, model, filters=()):
-    limit = min(max(int(request.args.get("limit", 50)), 1), 100)
-    offset = max(int(request.args.get("offset", 0)), 0)
+    try:
+        limit = min(max(int(request.args.get("limit", 50)), 1), 100)
+        offset = max(int(request.args.get("offset", 0)), 0)
+    except ValueError:
+        raise ApiError("VALIDATION_ERROR", "limit and offset must be integers", 422) from None
     for predicate in filters:
         query = query.where(predicate)
     rows = list(g.db.scalars(query.limit(limit).offset(offset)))
@@ -106,9 +109,9 @@ def vessel(vessel_id):
     authenticate(g.db); entity = g.db.get(Vessel, vessel_id)
     if entity is None: raise ApiError("NOT_FOUND", "Vessel not found", 404)
     if request.method == "GET": return jsonify(serialize(entity))
-    if request.method == "DELETE": g.db.delete(entity); commit(); return "", 204
+    if request.method == "DELETE": g.db.delete(entity); audit("VESSEL_DELETED", "Vessel", vessel_id); commit(); return "", 204
     for key, value in body(VesselRequest).model_dump().items(): setattr(entity, key, value)
-    commit(); return jsonify(serialize(entity))
+    audit("VESSEL_UPDATED", "Vessel", vessel_id); commit(); return jsonify(serialize(entity))
 
 
 @api_blueprint.route("/missions", methods=["GET", "POST"])
@@ -137,6 +140,8 @@ def mission(mission_id):
 def transition(mission_id):
     user = authenticate(g.db); entity = g.db.get(Mission, mission_id)
     if entity is None: raise ApiError("NOT_FOUND", "Mission not found", 404)
+    if entity.created_by_id != user.id and "admin" not in {role.name for role in user.roles}:
+        raise ApiError("FORBIDDEN", "Mission ownership is required", 403)
     requested = body(MissionTransitionRequest).state
     if requested == "APPROVED": raise ApiError("HUMAN_APPROVAL_REQUIRED", "Approve a reviewed route using the approval endpoint", 409)
     if requested not in TRANSITIONS[entity.state]: raise ApiError("INVALID_STATE_TRANSITION", f"Cannot transition from {entity.state} to {requested}", 409)
@@ -145,9 +150,12 @@ def transition(mission_id):
 
 @api_blueprint.post("/missions/<uuid:mission_id>/constraints")
 def mission_constraint(mission_id):
-    authenticate(g.db)
-    if g.db.get(Mission, mission_id) is None: raise ApiError("NOT_FOUND", "Mission not found", 404)
-    data = body(ConstraintRequest); constraint = MissionConstraint(mission_id=mission_id, **data.model_dump()); g.db.add(constraint); commit(); return jsonify(serialize(constraint)), 201
+    user = authenticate(g.db)
+    mission = g.db.get(Mission, mission_id)
+    if mission is None: raise ApiError("NOT_FOUND", "Mission not found", 404)
+    if mission.created_by_id != user.id and "admin" not in {role.name for role in user.roles}:
+        raise ApiError("FORBIDDEN", "Mission ownership is required", 403)
+    data = body(ConstraintRequest); constraint = MissionConstraint(mission_id=mission_id, **data.model_dump()); g.db.add(constraint); audit("MISSION_CONSTRAINT_CREATED", "MissionConstraint", constraint.id); commit(); return jsonify(serialize(constraint)), 201
 
 
 @api_blueprint.get("/environment")
@@ -179,7 +187,11 @@ def approve_route(route_id):
     route = g.db.get(Route, route_id)
     if route is None: raise ApiError("NOT_FOUND", "Route not found", 404)
     data = body(ApprovalRequest); user = g.current_user
-    if data.decision == "APPROVED" and route.status != "UNDER_REVIEW": raise ApiError("ROUTE_NOT_UNDER_REVIEW", "A route must be reviewed before approval", 409)
+    review = g.db.scalar(select(RouteReview).where(RouteReview.route_id == route_id).order_by(RouteReview.created_at.desc()))
+    if route.status != "UNDER_REVIEW" or review is None:
+        raise ApiError("ROUTE_NOT_UNDER_REVIEW", "A route must be reviewed before approval", 409)
+    if review.reviewer_id == user.id:
+        raise ApiError("REVIEWER_APPROVER_SEPARATION_REQUIRED", "The route reviewer cannot approve the same route", 409)
     approval = RouteApproval(route_id=route_id, approver_id=user.id, **data.model_dump()); route.status = data.decision
     candidate = g.db.get(RouteCandidate, route.route_candidate_id); mission = g.db.get(Mission, candidate.mission_id) if candidate else None
     if mission: mission.state = data.decision

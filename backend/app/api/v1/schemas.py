@@ -41,7 +41,7 @@ class ConstraintRequest(Payload):
 
 
 class ReviewRequest(Payload):
-    decision: str = Field(min_length=1, max_length=32)
+    decision: Literal["RECOMMENDED", "NOT_RECOMMENDED", "NEEDS_CHANGES"]
     reason: str | None = Field(default=None, max_length=5000)
 
 

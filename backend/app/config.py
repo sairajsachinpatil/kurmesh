@@ -10,6 +10,15 @@ class Settings:
     cors_origins: list[str]
     auth_secret: str = ""
 
+    def validate(self) -> None:
+        """Validate secrets needed by the authenticated application API.
+
+        Database and Redis availability remains observable through health checks;
+        a signing key is different because operating without one makes auth unsafe.
+        """
+        if len(self.auth_secret) < 32 or self.auth_secret.startswith("replace-with-"):
+            raise ValueError("AUTH_SECRET must be configured with at least 32 characters")
+
     @classmethod
     def from_environment(cls) -> "Settings":
         return cls(
