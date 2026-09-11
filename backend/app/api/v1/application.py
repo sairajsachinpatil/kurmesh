@@ -3,15 +3,16 @@ from datetime import UTC, datetime
 
 from flask import Blueprint, g, jsonify, request
 from pydantic import ValidationError
+from geoalchemy2.elements import WKTElement
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.auth import ApiError, authenticate, issue_token, password_hash, password_matches, require_roles
-from app.models import (Alert, AuditEvent, EnvironmentObservation, ModelVersion, Mission, MissionConstraint,
+from app.models import (Alert, AuditEvent, EnvironmentObservation, EnvironmentSource, ModelArtifact, ModelVersion, Mission, MissionConstraint,
                         Prediction, ProvenanceRecord, Route, RouteApproval, RouteCandidate, RouteReview,
                         SimulationRun, User, Vessel)
 from app.repositories import MissionRepository, Repository, RoleRepository, UserRepository
-from app.api.v1.schemas import (ApprovalRequest, ConstraintRequest, LoginRequest, MissionCreateRequest, MissionUpdateRequest,
+from app.api.v1.schemas import (ApprovalRequest, ConstraintRequest, EnvironmentObservationCreateRequest, EnvironmentSourceCreateRequest, EnvironmentSourceUpdateRequest, LoginRequest, MissionCreateRequest, MissionUpdateRequest, ModelArtifactCreateRequest, ModelVersionCreateRequest, ModelVersionUpdateRequest, PredictionCreateRequest,
                                 MissionTransitionRequest, RegisterRequest, ReviewRequest, SimulationRequest,
                                 VesselRequest)
 
@@ -51,8 +52,35 @@ def serialize(value):
     if isinstance(value, ProvenanceRecord): return {"id": str(value.id), "entity_type": value.entity_type, "entity_id": str(value.entity_id), "source_type": value.source_type, "source_reference": value.source_reference, "details": value.details}
     if isinstance(value, ModelVersion): return {"id": str(value.id), "name": value.name, "version": value.version, "status": value.status, "metadata": value.metadata_json}
     if isinstance(value, Prediction): return {"id": str(value.id), "status": value.status, "reason": value.reason, "output": value.output}
-    if isinstance(value, EnvironmentObservation): return {"id": str(value.id), "observation_type": value.observation_type, "status": value.status, "units": value.units, "retrieved_at": value.retrieved_at.isoformat()}
+    if isinstance(value, EnvironmentSource): return {"id": str(value.id), "provider": value.provider, "source": value.source, "url": value.url, "metadata": value.metadata_json}
+    if isinstance(value, EnvironmentObservation): return {"id": str(value.id), "source_id": str(value.source_id), "observation_type": value.observation_type, "status": value.status, "value": value.value, "units": value.units, "quality": value.quality, "resolution": value.resolution, "retrieved_at": value.retrieved_at.isoformat(), "valid_from": value.valid_from.isoformat() if value.valid_from else None, "valid_to": value.valid_to.isoformat() if value.valid_to else None}
     raise TypeError(f"No serializer for {type(value)!r}")
+
+
+def paginated(query):
+    try:
+        page_number = max(int(request.args.get("page", 1)), 1)
+        page_size = min(max(int(request.args.get("page_size", 20)), 1), 100)
+    except ValueError:
+        raise ApiError("VALIDATION_ERROR", "page and page_size must be integers", 422) from None
+    total = g.db.scalar(select(func.count()).select_from(query.subquery())) or 0
+    rows = list(g.db.scalars(query.limit(page_size).offset((page_number - 1) * page_size)))
+    return {"items": rows, "page": page_number, "page_size": page_size, "total": total}
+
+
+def observation_payload(observation: EnvironmentObservation) -> dict:
+    payload = serialize(observation)
+    if observation.location is not None:
+        longitude, latitude = g.db.execute(select(func.ST_X(observation.location), func.ST_Y(observation.location))).one()
+        payload["location"] = {"longitude": longitude, "latitude": latitude}
+    else:
+        payload["location"] = None
+    return payload
+
+
+def require_mission_access(mission: Mission, user: User) -> None:
+    if mission.created_by_id != user.id and "admin" not in {role.name for role in user.roles}:
+        raise ApiError("FORBIDDEN", "You are not authorized to access this mission data", 403)
 
 
 def audit(event_type: str, entity_type: str, entity_id: uuid.UUID | None) -> None:
@@ -192,14 +220,92 @@ def mission_constraint(mission_id):
     data = body(ConstraintRequest); constraint = MissionConstraint(mission_id=mission_id, **data.model_dump()); g.db.add(constraint); audit("MISSION_CONSTRAINT_CREATED", "MissionConstraint", constraint.id); commit(); return jsonify(serialize(constraint)), 201
 
 
-@api_blueprint.get("/environment")
-def environment():
-    authenticate(g.db); return page(select(EnvironmentObservation).order_by(EnvironmentObservation.retrieved_at.desc()), EnvironmentObservation)
+@api_blueprint.route("/environment/sources", methods=["GET", "POST"])
+def environment_sources():
+    authenticate(g.db)
+    if request.method == "GET":
+        result = paginated(select(EnvironmentSource).order_by(EnvironmentSource.created_at.desc()))
+        return jsonify({**result, "items": [serialize(item) for item in result["items"]]})
+    data = body(EnvironmentSourceCreateRequest)
+    if g.db.scalar(select(EnvironmentSource).where(EnvironmentSource.provider == data.provider, EnvironmentSource.source == data.source)):
+        raise ApiError("DUPLICATE_ENVIRONMENT_SOURCE", "An environment source with this provider and source already exists", 409)
+    entity = EnvironmentSource(provider=data.provider, source=data.source, url=data.url, metadata_json=data.metadata)
+    g.db.add(entity); commit(); audit("ENVIRONMENT_SOURCE_CREATED", "EnvironmentSource", entity.id); commit()
+    return jsonify(serialize(entity)), 201
 
 
-@api_blueprint.get("/predictions")
+@api_blueprint.route("/environment/sources/<uuid:source_id>", methods=["GET", "PATCH"])
+def environment_source(source_id):
+    authenticate(g.db); entity = g.db.get(EnvironmentSource, source_id)
+    if entity is None: raise ApiError("ENVIRONMENT_SOURCE_NOT_FOUND", "Environment source not found", 404)
+    if request.method == "GET": return jsonify(serialize(entity))
+    data = body(EnvironmentSourceUpdateRequest)
+    provider, source = data.provider or entity.provider, data.source or entity.source
+    conflict = g.db.scalar(select(EnvironmentSource).where(EnvironmentSource.provider == provider, EnvironmentSource.source == source, EnvironmentSource.id != entity.id))
+    if conflict: raise ApiError("DUPLICATE_ENVIRONMENT_SOURCE", "An environment source with this provider and source already exists", 409)
+    if data.provider is not None: entity.provider = data.provider
+    if data.source is not None: entity.source = data.source
+    if data.url is not None: entity.url = data.url
+    if data.metadata is not None: entity.metadata_json = data.metadata
+    audit("ENVIRONMENT_SOURCE_UPDATED", "EnvironmentSource", entity.id); commit(); return jsonify(serialize(entity))
+
+
+@api_blueprint.route("/environment/observations", methods=["GET", "POST"])
+def environment_observations():
+    authenticate(g.db)
+    if request.method == "GET":
+        query = select(EnvironmentObservation).order_by(EnvironmentObservation.retrieved_at.desc())
+        if value := request.args.get("observation_type"): query = query.where(EnvironmentObservation.observation_type == value)
+        if value := request.args.get("status"): query = query.where(EnvironmentObservation.status == value)
+        if value := request.args.get("source_id"):
+            try: query = query.where(EnvironmentObservation.source_id == uuid.UUID(value))
+            except ValueError: raise ApiError("VALIDATION_ERROR", "source_id must be a UUID", 422) from None
+        if value := request.args.get("valid_from"): query = query.where(EnvironmentObservation.retrieved_at >= value)
+        if value := request.args.get("valid_to"): query = query.where(EnvironmentObservation.retrieved_at <= value)
+        result = paginated(query)
+        return jsonify({**result, "items": [observation_payload(item) for item in result["items"]]})
+    data = body(EnvironmentObservationCreateRequest)
+    if g.db.get(EnvironmentSource, data.source_id) is None: raise ApiError("ENVIRONMENT_SOURCE_NOT_FOUND", "Environment source not found", 404)
+    location = WKTElement(f"POINT({data.location.longitude} {data.location.latitude})", srid=4326) if data.location else None
+    entity = EnvironmentObservation(**data.model_dump(exclude={"location"}), location=location)
+    g.db.add(entity); commit(); audit("ENVIRONMENT_OBSERVATION_CREATED", "EnvironmentObservation", entity.id); commit()
+    return jsonify(observation_payload(entity)), 201
+
+
+@api_blueprint.get("/environment/observations/<uuid:observation_id>")
+def environment_observation(observation_id):
+    authenticate(g.db); entity = g.db.get(EnvironmentObservation, observation_id)
+    if entity is None: raise ApiError("ENVIRONMENT_OBSERVATION_NOT_FOUND", "Environment observation not found", 404)
+    return jsonify(observation_payload(entity))
+
+
+@api_blueprint.route("/predictions", methods=["GET", "POST"])
 def predictions():
-    authenticate(g.db); return page(select(Prediction).order_by(Prediction.created_at.desc()), Prediction)
+    user = authenticate(g.db)
+    if request.method == "GET":
+        query = select(Prediction).join(Mission, Prediction.mission_id == Mission.id).order_by(Prediction.created_at.desc())
+        if "admin" not in {role.name for role in user.roles}:
+            query = query.where(Mission.created_by_id == user.id)
+        result = paginated(query)
+        return jsonify({**result, "items": [serialize(item) for item in result["items"]]})
+    data = body(PredictionCreateRequest)
+    mission = g.db.get(Mission, data.mission_id)
+    if mission is None: raise ApiError("MISSION_NOT_FOUND", "Mission not found", 404)
+    require_mission_access(mission, user)
+    if g.db.get(ModelVersion, data.model_version_id) is None: raise ApiError("MODEL_NOT_FOUND", "Model version not found", 404)
+    entity = Prediction(**data.model_dump())
+    g.db.add(entity); commit(); audit("PREDICTION_RECORDED", "Prediction", entity.id); commit()
+    return jsonify(serialize(entity)), 201
+
+
+@api_blueprint.get("/predictions/<uuid:prediction_id>")
+def prediction(prediction_id):
+    user = authenticate(g.db); entity = g.db.get(Prediction, prediction_id)
+    if entity is None: raise ApiError("PREDICTION_NOT_FOUND", "Prediction not found", 404)
+    mission = g.db.get(Mission, entity.mission_id)
+    if mission is None: raise ApiError("PREDICTION_NOT_FOUND", "Prediction not found", 404)
+    require_mission_access(mission, user)
+    return jsonify(serialize(entity))
 
 
 @api_blueprint.get("/routes")
@@ -251,9 +357,51 @@ def provenance():
     authenticate(g.db); return page(select(ProvenanceRecord).order_by(ProvenanceRecord.created_at.desc()), ProvenanceRecord)
 
 
-@api_blueprint.get("/models")
+@api_blueprint.route("/models", methods=["GET", "POST"])
 def models():
-    authenticate(g.db); return page(select(ModelVersion).order_by(ModelVersion.created_at.desc()), ModelVersion)
+    authenticate(g.db)
+    if request.method == "GET":
+        result = paginated(select(ModelVersion).order_by(ModelVersion.created_at.desc()))
+        return jsonify({**result, "items": [serialize(item) for item in result["items"]]})
+    data = body(ModelVersionCreateRequest)
+    if g.db.scalar(select(ModelVersion).where(ModelVersion.name == data.name, ModelVersion.version == data.version)):
+        raise ApiError("DUPLICATE_MODEL_VERSION", "A model with this name and version already exists", 409)
+    entity = ModelVersion(name=data.name, version=data.version, status=data.status, metadata_json=data.metadata)
+    g.db.add(entity); commit(); audit("MODEL_VERSION_CREATED", "ModelVersion", entity.id); commit()
+    return jsonify(serialize(entity)), 201
+
+
+@api_blueprint.route("/models/<uuid:model_id>", methods=["GET", "PATCH"])
+def model(model_id):
+    authenticate(g.db); entity = g.db.get(ModelVersion, model_id)
+    if entity is None: raise ApiError("MODEL_NOT_FOUND", "Model version not found", 404)
+    if request.method == "GET": return jsonify(serialize(entity))
+    data = body(ModelVersionUpdateRequest)
+    if data.status is not None: entity.status = data.status
+    if data.metadata is not None: entity.metadata_json = data.metadata
+    audit("MODEL_VERSION_UPDATED", "ModelVersion", entity.id); commit(); return jsonify(serialize(entity))
+
+
+@api_blueprint.route("/models/<uuid:model_id>/artifacts", methods=["GET", "POST"])
+def model_artifacts(model_id):
+    authenticate(g.db)
+    if g.db.get(ModelVersion, model_id) is None: raise ApiError("MODEL_NOT_FOUND", "Model version not found", 404)
+    if request.method == "GET":
+        result = paginated(select(ModelArtifact).where(ModelArtifact.model_version_id == model_id).order_by(ModelArtifact.created_at.desc()))
+        return jsonify({**result, "items": [{"id": str(item.id), "model_version_id": str(item.model_version_id), "path": item.path, "sha256": item.sha256, "artifact_type": item.artifact_type} for item in result["items"]]})
+    data = body(ModelArtifactCreateRequest)
+    entity = ModelArtifact(model_version_id=model_id, **data.model_dump())
+    g.db.add(entity); commit(); audit("MODEL_ARTIFACT_RECORDED", "ModelArtifact", entity.id); commit()
+    return jsonify({"id": str(entity.id), "model_version_id": str(entity.model_version_id), "path": entity.path, "sha256": entity.sha256, "artifact_type": entity.artifact_type}), 201
+
+
+@api_blueprint.get("/models/<uuid:model_id>/artifacts/<uuid:artifact_id>")
+def model_artifact(model_id, artifact_id):
+    authenticate(g.db)
+    if g.db.get(ModelVersion, model_id) is None: raise ApiError("MODEL_NOT_FOUND", "Model version not found", 404)
+    entity = g.db.get(ModelArtifact, artifact_id)
+    if entity is None or entity.model_version_id != model_id: raise ApiError("MODEL_ARTIFACT_NOT_FOUND", "Model artifact not found", 404)
+    return jsonify({"id": str(entity.id), "model_version_id": str(entity.model_version_id), "path": entity.path, "sha256": entity.sha256, "artifact_type": entity.artifact_type})
 
 
 @api_blueprint.get("/audit")
