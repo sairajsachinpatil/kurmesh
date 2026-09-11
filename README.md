@@ -70,6 +70,10 @@ Phase 3A completes the authentication, user-profile, and mission API foundation.
 
 Phase 3B remains out of scope: no ML, environmental providers, routing, simulation execution, or frontend domain workflows are implemented.
 
+## Phase 3B-1 metadata APIs
+
+Authenticated callers can persist and retrieve explicitly supplied metadata at `/api/v1/environment/sources`, `/api/v1/environment/observations`, `/api/v1/models`, `/api/v1/models/<model_id>/artifacts`, and `/api/v1/predictions`. Observation locations use `{ "longitude": ..., "latitude": ... }` and are stored as SRID 4326 points. Prediction creation records only a submitted persistence request (`PENDING`, `FAILED`, or `MODEL_UNAVAILABLE`); it never runs inference or creates outputs.
+
 ## Environment and safety
 
 Use `.env.example` only as a template; never commit `.env`. The provided password is deliberately a placeholder and fails Compose interpolation until replaced. Production requires a secrets manager, TLS/reverse proxy configuration, restricted CORS origins, backups, and authenticated API domains in later phases.
