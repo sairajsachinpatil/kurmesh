@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 class Payload(BaseModel):
@@ -121,3 +121,85 @@ class PredictionCreateRequest(Payload):
     input_provenance: dict[str, Any] = Field(default_factory=dict)
     output: dict[str, Any] | None = None
     reason: str | None = None
+
+
+class GeoJSONLineString(Payload):
+    type: Literal["LineString"]
+    coordinates: list[list[float]] = Field(min_length=2)
+
+    @field_validator("coordinates")
+    @classmethod
+    def validate_coordinates(cls, value: list[list[float]]) -> list[list[float]]:
+        for point in value:
+            if len(point) != 2 or not -180 <= point[0] <= 180 or not -90 <= point[1] <= 90:
+                raise ValueError("coordinates must contain [longitude, latitude] pairs in range")
+        return value
+
+
+class RouteCandidateCreateRequest(Payload):
+    version: int = Field(ge=1)
+    geometry: GeoJSONLineString
+    prediction_id: uuid.UUID | None = None
+    status: Literal["DRAFT", "READY", "REJECTED"] = "DRAFT"
+    distance_nm: float | None = Field(default=None, ge=0)
+    estimated_duration_hours: float | None = Field(default=None, ge=0)
+    risk_score: float | None = Field(default=None, ge=0)
+    risk_components: dict[str, Any] = Field(default_factory=dict)
+    environmental_snapshot: dict[str, Any] = Field(default_factory=dict)
+    algorithm_version: str = Field(min_length=1, max_length=80)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class RouteCandidateUpdateRequest(Payload):
+    status: Literal["DRAFT", "READY", "REJECTED"] | None = None
+    distance_nm: float | None = Field(default=None, ge=0)
+    estimated_duration_hours: float | None = Field(default=None, ge=0)
+    risk_score: float | None = Field(default=None, ge=0)
+    risk_components: dict[str, Any] | None = None
+    environmental_snapshot: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
+
+
+class RouteCreateRequest(Payload):
+    route_candidate_id: uuid.UUID
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class RouteUpdateRequest(Payload):
+    status: Literal["DRAFT", "ACTIVE", "RETIRED"] | None = None
+    metadata: dict[str, Any] | None = None
+
+
+class GovernedReviewRequest(Payload):
+    decision: Literal["APPROVED", "REJECTED", "CHANGES_REQUESTED"]
+    comments: str | None = Field(default=None, max_length=5000)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class GovernedApprovalRequest(Payload):
+    decision: Literal["APPROVED", "REJECTED"]
+    comments: str | None = Field(default=None, max_length=5000)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AlertCreateRequest(Payload):
+    mission_id: uuid.UUID
+    severity: Literal["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
+    category: str = Field(min_length=1, max_length=80)
+    title: str = Field(min_length=1, max_length=200)
+    message: str = Field(min_length=1, max_length=5000)
+
+
+class AlertAcknowledgeRequest(Payload):
+    status: Literal["ACKNOWLEDGED", "RESOLVED"] = "ACKNOWLEDGED"
+
+
+class ProvenanceCreateRequest(Payload):
+    entity_type: str = Field(min_length=1, max_length=100)
+    entity_id: uuid.UUID
+    source_type: str = Field(min_length=1, max_length=100)
+    source_reference: str = Field(min_length=1, max_length=2000)
+    retrieved_at: datetime | None = None
+    source_timestamp: datetime | None = None
+    checksum: str | None = Field(default=None, max_length=128)
+    details: dict[str, Any] = Field(default_factory=dict)

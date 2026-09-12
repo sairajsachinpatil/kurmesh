@@ -68,11 +68,19 @@ Phase 3A completes the authentication, user-profile, and mission API foundation.
 
 `GET /api/v1/auth/me` and `GET /api/v1/users/me` return the authenticated safe user profile. A user may retrieve their own `/api/v1/users/<uuid>` profile; `admin` may retrieve other profiles. Mission CRUD remains under `/api/v1/missions`; list responses accept `page` and `page_size` (maximum 100) and include pagination metadata. A referenced vessel must exist.
 
-Phase 3B remains out of scope: no ML, environmental providers, routing, simulation execution, or frontend domain workflows are implemented.
+Phase 3B does not implement ML, environmental providers, routing algorithms, simulation execution, or frontend domain workflows.
 
 ## Phase 3B-1 metadata APIs
 
 Authenticated callers can persist and retrieve explicitly supplied metadata at `/api/v1/environment/sources`, `/api/v1/environment/observations`, `/api/v1/models`, `/api/v1/models/<model_id>/artifacts`, and `/api/v1/predictions`. Observation locations use `{ "longitude": ..., "latitude": ... }` and are stored as SRID 4326 points. Prediction creation records only a submitted persistence request (`PENDING`, `FAILED`, or `MODEL_UNAVAILABLE`); it never runs inference or creates outputs.
+
+## Phase 3B-2 governed routing workflow
+
+Mission owners or `admin` may manage submitted route candidates and operational route records at `/missions/<mission_id>/route-candidates` and `/missions/<mission_id>/routes`. Geometry is validated SRID-4326 GeoJSON `LineString` data; these endpoints never calculate a route.
+
+Reviews (`POST /routes/<route_id>/reviews`) and approvals (`POST /routes/<route_id>/approvals`) are separate operator/admin actions. A mission owner cannot act as reviewer or approver without admin authority, an approved review is required before approval, and the reviewer cannot approve the same route. Creating or reviewing a route never approves it; only an explicit approval record may transition it to `APPROVED` or `REJECTED`.
+
+Mission-scoped alerts are available at `/missions/<mission_id>/alerts` with acknowledgement at `/alerts/<alert_id>/acknowledgement`. Operators/admins may record explicitly supplied provenance at `/provenance`; only admins may list it. Workflow mutations create append-oriented audit events, which have no mutation endpoint.
 
 ## Environment and safety
 

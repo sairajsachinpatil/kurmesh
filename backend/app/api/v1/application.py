@@ -310,13 +310,22 @@ def prediction(prediction_id):
 
 @api_blueprint.get("/routes")
 def routes():
-    authenticate(g.db); return page(select(Route).order_by(Route.created_at.desc()), Route)
+    user = authenticate(g.db)
+    query = select(Route).join(RouteCandidate).join(Mission).order_by(Route.created_at.desc())
+    if "admin" not in {role.name for role in user.roles}:
+        query = query.where(Mission.created_by_id == user.id)
+    return page(query, Route)
 
 
 @api_blueprint.post("/routes/<uuid:route_id>/review")
 def review_route(route_id):
     user = authenticate(g.db); route = g.db.get(Route, route_id)
     if route is None: raise ApiError("NOT_FOUND", "Route not found", 404)
+    candidate = g.db.get(RouteCandidate, route.route_candidate_id); mission = g.db.get(Mission, candidate.mission_id) if candidate else None
+    if mission is None: raise ApiError("NOT_FOUND", "Route mission not found", 404)
+    roles = {role.name for role in user.roles}
+    if not roles.intersection({"operator", "admin"}) or (mission.created_by_id == user.id and "admin" not in roles):
+        raise ApiError("FORBIDDEN", "An independent operator or admin reviewer is required", 403)
     data = body(ReviewRequest); review = RouteReview(route_id=route_id, reviewer_id=user.id, **data.model_dump()); route.status = "UNDER_REVIEW"; g.db.add(review); audit("ROUTE_REVIEWED", "Route", route_id); commit()
     return jsonify({"id": str(review.id), "route_id": str(route_id), "decision": review.decision}), 201
 
@@ -327,9 +336,13 @@ def approve_route(route_id):
     route = g.db.get(Route, route_id)
     if route is None: raise ApiError("NOT_FOUND", "Route not found", 404)
     data = body(ApprovalRequest); user = g.current_user
+    candidate = g.db.get(RouteCandidate, route.route_candidate_id); mission = g.db.get(Mission, candidate.mission_id) if candidate else None
+    if mission is None: raise ApiError("NOT_FOUND", "Route mission not found", 404)
+    if mission.created_by_id == user.id and "admin" not in {role.name for role in user.roles}:
+        raise ApiError("FORBIDDEN", "Mission owner cannot approve their own route", 403)
     review = g.db.scalar(select(RouteReview).where(RouteReview.route_id == route_id).order_by(RouteReview.created_at.desc()))
-    if route.status != "UNDER_REVIEW" or review is None:
-        raise ApiError("ROUTE_NOT_UNDER_REVIEW", "A route must be reviewed before approval", 409)
+    if route.status != "UNDER_REVIEW" or review is None or review.decision not in {"RECOMMENDED", "APPROVED"}:
+        raise ApiError("ROUTE_NOT_UNDER_REVIEW", "An affirmative human review is required before approval", 409)
     if review.reviewer_id == user.id:
         raise ApiError("REVIEWER_APPROVER_SEPARATION_REQUIRED", "The route reviewer cannot approve the same route", 409)
     approval = RouteApproval(route_id=route_id, approver_id=user.id, **data.model_dump()); route.status = data.decision
@@ -341,7 +354,11 @@ def approve_route(route_id):
 
 @api_blueprint.get("/alerts")
 def alerts():
-    authenticate(g.db); return page(select(Alert).order_by(Alert.created_at.desc()), Alert)
+    user = authenticate(g.db)
+    query = select(Alert).join(Mission, Alert.mission_id == Mission.id).order_by(Alert.created_at.desc())
+    if "admin" not in {role.name for role in user.roles}:
+        query = query.where(Mission.created_by_id == user.id)
+    return page(query, Alert)
 
 
 @api_blueprint.route("/simulation", methods=["GET", "POST"])
@@ -354,7 +371,10 @@ def simulation():
 
 @api_blueprint.get("/provenance")
 def provenance():
-    authenticate(g.db); return page(select(ProvenanceRecord).order_by(ProvenanceRecord.created_at.desc()), ProvenanceRecord)
+    user = authenticate(g.db)
+    if "admin" not in {role.name for role in user.roles}:
+        raise ApiError("FORBIDDEN", "Admin role is required", 403)
+    return page(select(ProvenanceRecord).order_by(ProvenanceRecord.created_at.desc()), ProvenanceRecord)
 
 
 @api_blueprint.route("/models", methods=["GET", "POST"])

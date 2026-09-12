@@ -4,6 +4,7 @@ from flask_cors import CORS
 
 from app.api.v1.health import health_blueprint
 from app.api.v1.application import api_blueprint
+from app.api.v1.workflow import workflow_blueprint
 from app.auth import ApiError
 from app.config import Settings
 from app.database import build_session_factory
@@ -56,6 +57,7 @@ def create_app(settings: Settings | None = None) -> Flask:
         raise error
 
     app.register_blueprint(api_blueprint, url_prefix="/api/v1")
+    app.register_blueprint(workflow_blueprint, url_prefix="/api/v1")
 
     @app.get("/api/v1")
     def api_root() -> dict[str, str]:

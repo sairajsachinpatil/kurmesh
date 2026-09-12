@@ -147,7 +147,9 @@ class RouteCandidate(Timestamped, Base):
     __table_args__ = (UniqueConstraint("mission_id", "version", name="uq_route_candidate_mission_version"),)
     id: Mapped[uuid.UUID] = uuid_pk()
     mission_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("missions.id", ondelete="CASCADE"), nullable=False, index=True)
+    prediction_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("predictions.id", ondelete="SET NULL"), index=True)
     version: Mapped[int] = mapped_column(nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="DRAFT", nullable=False)
     geometry: Mapped[str] = mapped_column(Geometry("LINESTRING", srid=4326, spatial_index=True), nullable=False)
     distance_nm: Mapped[float | None]
     estimated_duration_hours: Mapped[float | None]
@@ -155,6 +157,7 @@ class RouteCandidate(Timestamped, Base):
     risk_components: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     environmental_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     algorithm_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     mission: Mapped[Mission] = relationship(back_populates="route_candidates")
 
 
@@ -163,6 +166,8 @@ class Route(Timestamped, Base):
     id: Mapped[uuid.UUID] = uuid_pk()
     route_candidate_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("route_candidates.id", ondelete="CASCADE"), unique=True, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
+    geometry: Mapped[str | None] = mapped_column(Geometry("LINESTRING", srid=4326, spatial_index=True))
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     route_candidate: Mapped[RouteCandidate] = relationship()
 
 
@@ -173,6 +178,7 @@ class RouteReview(Timestamped, Base):
     reviewer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     decision: Mapped[str] = mapped_column(String(32), nullable=False)
     reason: Mapped[str | None] = mapped_column(Text)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
 
 
 class RouteApproval(Timestamped, Base):
@@ -182,6 +188,7 @@ class RouteApproval(Timestamped, Base):
     approver_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     decision: Mapped[str] = mapped_column(String(16), nullable=False)
     reason: Mapped[str | None] = mapped_column(Text)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     __table_args__ = (CheckConstraint("decision IN ('APPROVED','REJECTED')", name="ck_route_approval_decision"),)
 
 
@@ -190,8 +197,12 @@ class Alert(Timestamped, Base):
     id: Mapped[uuid.UUID] = uuid_pk()
     mission_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("missions.id", ondelete="SET NULL"), index=True)
     severity: Mapped[str] = mapped_column(String(16), nullable=False)
+    category: Mapped[str] = mapped_column(String(80), default="GENERAL", nullable=False)
+    title: Mapped[str] = mapped_column(String(200), default="Alert", nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
+    acknowledged_by_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
@@ -223,5 +234,8 @@ class ProvenanceRecord(Timestamped, Base):
     entity_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     source_type: Mapped[str] = mapped_column(String(100), nullable=False)
     source_reference: Mapped[str] = mapped_column(String(2000), nullable=False)
+    retrieved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    checksum: Mapped[str | None] = mapped_column(String(128))
     details: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     __table_args__ = (Index("ix_provenance_entity", "entity_type", "entity_id"),)
