@@ -1,6 +1,6 @@
 # KURMESH V1
 
-KURMESH is a maritime decision-support system. It currently contains Phase 1 infrastructure and the Phase 2 application foundation: a React health dashboard, Flask API, PostGIS persistence schema, authentication/authorization primitives, audit-event creation, and human route review/approval controls. It contains no environmental provider, ML, routing, simulation-worker, or frontend domain workflow implementation.
+KURMESH is a maritime decision-support system. It currently contains Phase 1 infrastructure and the Phase 2 application foundation: a React health dashboard, Flask API, PostGIS persistence schema, authentication/authorization primitives, audit-event creation, and human route review/approval controls. It contains no connected environmental provider, ML, routing, simulation-worker, or frontend domain workflow implementation.
 
 ## Start locally
 
@@ -86,11 +86,37 @@ Mission-scoped alerts are available at `/missions/<mission_id>/alerts` with ackn
 
 Use `.env.example` only as a template; never commit `.env`. The provided password is deliberately a placeholder and fails Compose interpolation until replaced. Production requires a secrets manager, TLS/reverse proxy configuration, restricted CORS origins, backups, and authenticated API domains in later phases.
 
+## Phase 4A environmental provider architecture
+
+Phase 4A adds an architecture boundary only; it includes no real external provider, network request, environmental value, ML inference, routing calculation, or new Flask endpoint. Existing `/api/v1/environment/*` APIs remain manual metadata APIs and retain their contracts.
+
+Future workers or services use this flow:
+
+```
+External provider -> provider adapter -> normalized observation -> validation/status/provenance -> ingestion service -> existing environment tables
+```
+
+Provider adapters live under `backend/app/environment/providers.py`. An adapter implements `EnvironmentalProviderAdapter`, declares the domains it supports (`sea_ice`, `weather`, or `ocean_conditions`), and is responsible only for its provider's authentication, request construction, and response parsing. It returns `NormalizedEnvironmentalObservation` objects; adapters must not import Flask routes, SQLAlchemy models, repository code, ML, or routing modules.
+
+The normalized observation carries observation type, source observation time, retrieval time, optional WGS84 location, provider/product/source reference, optional checksum, status, values/units, metadata, and provenance details. The ingestion service stores only data-bearing `LIVE`, `STALE`, or `DEGRADED` observations and creates a linked append-only provenance record using the existing `environment_sources`, `environment_observations`, and `provenance_records` schema. `UNAVAILABLE` and `ERROR` outcomes intentionally contain no values and are not persisted as observations, preventing a failure diagnostic from becoming fake environmental data.
+
+Status semantics are explicit:
+
+- `LIVE`: provider data is available and current according to the adapter's documented freshness rule.
+- `STALE`: genuine provider data is available but outside that freshness rule.
+- `DEGRADED`: genuine provider data is available with a documented limitation (for example, partial coverage); the limitation belongs in provenance/metadata.
+- `UNAVAILABLE`: the provider is disabled, no adapter is registered, its domain is unsupported, or it returned no data. No observation values are invented.
+- `ERROR`: an adapter raised while requesting or parsing. The normalized outcome preserves a safe diagnostic code and exception type without exposing secrets; a future worker may log operational detail separately.
+
+Configuration is opt-in and disabled by default. `KURMESH_ENVIRONMENT_PROVIDERS` lists future adapter names; each name may use `KURMESH_ENVIRONMENT_PROVIDER_<NAME>_ENABLED`, `_ENDPOINT`, `_API_KEY`, and `_TIMEOUT_SECONDS`. Enabled providers require an absolute HTTP(S) endpoint. Secrets belong in deployment environment/secrets management, never source control. Compose forwards the registry and default timeout; when Phase 4B introduces a named adapter, its explicitly named endpoint/credential variables must also be forwarded to the backend/worker services.
+
+To add a provider in a later phase: implement and test its adapter against mocked provider payloads, register it in the worker/service composition root, configure its opt-in variables, define freshness/degradation rules, and invoke `EnvironmentalObservationIngestionService` inside a transaction. Do not place provider parsing in a Flask route and do not treat mock payloads as real data.
+
 ## Repository layout
 
 - `frontend/`: React/Vite health dashboard and API health integration.
 - `backend/`: Flask API, explicit Alembic migration, PostGIS models, auth foundation, dependency health probes, structured logging, and Celery configuration.
 - `workers/`: reserved for task-domain modules as worker behavior grows.
 - `database/`: reserved; Alembic migrations live in `backend/migrations/`.
-- `ml/`, `routing/`, `data/`, `models/`: reserved; no providers, artifacts, or fabricated outputs exist here.
+- `ml/`, `routing/`, `data/`, `models/`: reserved; no connected providers, artifacts, or fabricated outputs exist here.
 - `tests/`: cross-service and end-to-end tests added in later phases.

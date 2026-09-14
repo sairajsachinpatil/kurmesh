@@ -4,7 +4,7 @@ from typing import Generic, TypeVar
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Mission, Role, User
+from app.models import EnvironmentObservation, EnvironmentSource, Mission, ProvenanceRecord, Role, User
 
 ModelT = TypeVar("ModelT")
 
@@ -45,3 +45,28 @@ class RoleRepository(Repository[Role]):
 class MissionRepository(Repository[Mission]):
     def __init__(self, session: Session) -> None:
         super().__init__(session, Mission)
+
+
+class EnvironmentRepository:
+    """Persistence boundary for already-normalized environmental data only."""
+
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def source_by_provider_and_product(self, provider: str, product: str) -> EnvironmentSource | None:
+        return self.session.scalar(select(EnvironmentSource).where(EnvironmentSource.provider == provider, EnvironmentSource.source == product))
+
+    def add_source(self, source: EnvironmentSource) -> EnvironmentSource:
+        self.session.add(source)
+        self.session.flush()
+        return source
+
+    def add_observation(self, observation: EnvironmentObservation) -> EnvironmentObservation:
+        self.session.add(observation)
+        self.session.flush()
+        return observation
+
+    def add_provenance(self, record: ProvenanceRecord) -> ProvenanceRecord:
+        self.session.add(record)
+        self.session.flush()
+        return record
