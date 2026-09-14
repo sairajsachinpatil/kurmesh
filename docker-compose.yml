@@ -37,6 +37,7 @@ services:
       REDIS_URL: ${REDIS_URL:?Set REDIS_URL in .env}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost}
+      AUTH_SECRET: ${AUTH_SECRET}
     depends_on:
       postgres:
         condition: service_healthy
