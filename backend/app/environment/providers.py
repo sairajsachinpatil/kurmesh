@@ -24,6 +24,10 @@ class EnvironmentalDomain(StrEnum):
     OCEAN_CONDITIONS = "ocean_conditions"
 
 
+class ProviderUnavailableError(Exception):
+    """An adapter could not obtain data, without supplying a fabricated observation."""
+
+
 @dataclass(frozen=True)
 class GeographicPoint:
     longitude: float
@@ -134,6 +138,8 @@ class ProviderCollectionService:
             return self._outcome(provider_name, request, ObservationStatus.UNAVAILABLE, "DOMAIN_NOT_SUPPORTED")
         try:
             observations = adapter.fetch(request, configuration)
+        except ProviderUnavailableError as exc:
+            return self._outcome(provider_name, request, ObservationStatus.UNAVAILABLE, str(exc) or "PROVIDER_UNAVAILABLE")
         except Exception as exc:
             # Do not expose exception text: provider errors may include credentials or endpoints.
             return self._outcome(provider_name, request, ObservationStatus.ERROR, "PROVIDER_EXCEPTION", exception_type=type(exc).__name__)

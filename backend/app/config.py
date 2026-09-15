@@ -12,6 +12,9 @@ class ProviderConfiguration:
     endpoint: str | None
     api_key: str | None
     timeout_seconds: int
+    freshness_hours: int = 48
+    lookback_days: int = 3
+    max_fallback_distance_km: float = 75.0
 
 
 @dataclass(frozen=True)
@@ -36,6 +39,10 @@ class Settings:
                 raise ValueError("Environment provider names may contain only letters, numbers, hyphens, and underscores")
             if provider.timeout_seconds < 1:
                 raise ValueError("Environment provider timeout must be at least one second")
+            if provider.freshness_hours < 1 or provider.lookback_days < 0:
+                raise ValueError("Environment provider freshness and lookback settings must be positive")
+            if provider.max_fallback_distance_km <= 0:
+                raise ValueError("Environment provider fallback distance must be positive")
             if provider.enabled and not provider.endpoint:
                 raise ValueError(f"Enabled environment provider {provider.name!r} requires an endpoint")
             if provider.endpoint:
@@ -57,6 +64,9 @@ class Settings:
                 endpoint=os.environ.get(f"KURMESH_ENVIRONMENT_PROVIDER_{name.upper().replace('-', '_')}_ENDPOINT") or None,
                 api_key=os.environ.get(f"KURMESH_ENVIRONMENT_PROVIDER_{name.upper().replace('-', '_')}_API_KEY") or None,
                 timeout_seconds=int(os.environ.get(f"KURMESH_ENVIRONMENT_PROVIDER_{name.upper().replace('-', '_')}_TIMEOUT_SECONDS", str(default_timeout))),
+                freshness_hours=int(os.environ.get(f"KURMESH_ENVIRONMENT_PROVIDER_{name.upper().replace('-', '_')}_FRESHNESS_HOURS", "48")),
+                lookback_days=int(os.environ.get(f"KURMESH_ENVIRONMENT_PROVIDER_{name.upper().replace('-', '_')}_LOOKBACK_DAYS", "3")),
+                max_fallback_distance_km=float(os.environ.get(f"KURMESH_ENVIRONMENT_PROVIDER_{name.upper().replace('-', '_')}_MAX_FALLBACK_DISTANCE_KM", "75")),
             )
             for name in provider_names
         )

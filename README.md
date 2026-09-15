@@ -112,6 +112,16 @@ Configuration is opt-in and disabled by default. `KURMESH_ENVIRONMENT_PROVIDERS`
 
 To add a provider in a later phase: implement and test its adapter against mocked provider payloads, register it in the worker/service composition root, configure its opt-in variables, define freshness/degradation rules, and invoke `EnvironmentalObservationIngestionService` inside a transaction. Do not place provider parsing in a Flask route and do not treat mock payloads as real data.
 
+## Phase 4B-1 NOAA/NSIDC Antarctic sea ice
+
+The opt-in `noaa_nsidc_g10016` adapter retrieves one daily Antarctic file from the official NOAA/NSIDC Near-Real-Time Climate Data Record of Passive Microwave Sea Ice Concentration, **G10016 Version 4**. The source is NetCDF4, daily, 25 km resolution, and uses the NSIDC South Polar Stereographic grid (**EPSG:3412**). It reads the documented `cdr_seaice_conc` variable and optional interpolation/quality flag variables; no weather, ocean, ML, or routing data is introduced.
+
+The adapter accepts a requested WGS84 Antarctic point, transforms it to EPSG:3412 to select the nearest source grid cell, then transforms that selected cell back to WGS84 for the existing PostGIS geometry. It never treats `x`/`y` metre offsets as longitude/latitude. Provenance retains G10016, version 4, source URL, SHA-256 of the downloaded file, the CF variable name/metadata, source CRS, and original projected coordinates.
+
+Set `KURMESH_ENVIRONMENT_PROVIDERS=noaa_nsidc_g10016`, enable `KURMESH_ENVIRONMENT_PROVIDER_NOAA_NSIDC_G10016_ENABLED`, and configure its official endpoint, timeout, freshness-hours, lookback-days, and bounded valid-cell fallback radius from `.env.example`. No API key is used. The adapter tries only the requested day and the configured number of prior days, so it does not download a historical collection. `LIVE` means source time is within `FRESHNESS_HOURS`; older genuine data is `STALE`; interpolation flags or a recorded nearest-valid-cell fallback create `DEGRADED`; absent daily files or no valid cell inside the configured radius become `UNAVAILABLE`; and network, malformed-file, missing-variable, invalid-value, or CRS failures become `ERROR` without fabricated/persisted data.
+
+Unit tests use only a tiny generated, clearly test-only G10016-format NetCDF fixture. To make a deliberate live request, set `KURMESH_RUN_LIVE_PROVIDER_TESTS=true` alongside enabled configuration and run `pytest -m live_provider`; normal test runs skip it.
+
 ## Repository layout
 
 - `frontend/`: React/Vite health dashboard and API health integration.

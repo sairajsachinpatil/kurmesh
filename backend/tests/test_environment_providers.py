@@ -96,7 +96,12 @@ def test_provider_configuration_validation_and_environment_parsing(monkeypatch):
     monkeypatch.setenv("KURMESH_ENVIRONMENT_PROVIDERS", "mock-provider")
     monkeypatch.setenv("KURMESH_ENVIRONMENT_PROVIDER_MOCK_PROVIDER_ENABLED", "true")
     monkeypatch.setenv("KURMESH_ENVIRONMENT_PROVIDER_MOCK_PROVIDER_ENDPOINT", "https://provider.example/api")
+    monkeypatch.setenv("KURMESH_ENVIRONMENT_PROVIDER_MOCK_PROVIDER_MAX_FALLBACK_DISTANCE_KM", "12.5")
     settings = Settings.from_environment()
     assert settings.provider_configuration("mock-provider").enabled is True
+    assert settings.provider_configuration("mock-provider").max_fallback_distance_km == 12.5
+    assert ProviderConfiguration("mock", True, "https://provider.example", None, 15).max_fallback_distance_km == 75.0
     with pytest.raises(ValueError, match="requires an endpoint"):
         Settings("sqlite://", "redis://", "INFO", ["http://localhost"], "x" * 32, (ProviderConfiguration("bad", True, None, None, 15),)).validate()
+    with pytest.raises(ValueError, match="fallback distance"):
+        Settings("sqlite://", "redis://", "INFO", ["http://localhost"], "x" * 32, (ProviderConfiguration("bad", True, "https://provider.example", None, 15, max_fallback_distance_km=0),)).validate()
