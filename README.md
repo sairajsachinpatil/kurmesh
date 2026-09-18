@@ -122,6 +122,12 @@ Set `KURMESH_ENVIRONMENT_PROVIDERS=noaa_nsidc_g10016`, enable `KURMESH_ENVIRONME
 
 Unit tests use only a tiny generated, clearly test-only G10016-format NetCDF fixture. To make a deliberate live request, set `KURMESH_RUN_LIVE_PROVIDER_TESTS=true` alongside enabled configuration and run `pytest -m live_provider`; normal test runs skip it.
 
+## Phase 4B-2 NOAA GFS weather forecasts
+
+The opt-in `noaa_gfs` adapter requests a small, variable-filtered window from NOAA/NCEP NOMADS GFS 0.25-degree GRIB2 forecasts. It provides 10 m wind (u/v components, derived speed and meteorological direction), 2 m air temperature (normalised to °C), and mean sea-level pressure (normalised to hPa). These are forecasts: `observed_at` is the GFS model cycle and `valid_to` is the selected forecast valid time; retrieval time remains separate.
+
+Set `KURMESH_ENVIRONMENT_PROVIDERS=noaa_gfs`, enable `KURMESH_ENVIRONMENT_PROVIDER_NOAA_GFS_ENABLED`, and configure `KURMESH_ENVIRONMENT_PROVIDER_NOAA_GFS_ENDPOINT=https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl`. Docker Compose supplies that same public NOMADS endpoint by default, but non-Compose deployments must configure it explicitly. A six-hour freshness threshold is the default. The adapter selects the nearest grid cell containing all required values using great-circle distance. A configurable, bounded fallback uses `DEGRADED`; a request without a complete valid cell inside that radius is `UNAVAILABLE`. Provenance records the GFS run, forecast hour and valid time, requested and selected coordinates, source/normalised units, fallback information, and source checksum. The live test is opt-in only when provider name, enabled state, endpoint, and `KURMESH_RUN_LIVE_PROVIDER_TESTS=true` are all configured. For Docker Compose: `docker compose run --rm -e KURMESH_ENVIRONMENT_PROVIDERS=noaa_gfs -e KURMESH_ENVIRONMENT_PROVIDER_NOAA_GFS_ENABLED=true -e KURMESH_RUN_LIVE_PROVIDER_TESTS=true backend pytest -q -rs -m live_provider`.
+
 ## Repository layout
 
 - `frontend/`: React/Vite health dashboard and API health integration.
