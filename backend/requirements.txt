@@ -15,3 +15,4 @@ h5netcdf==1.7.3
 pyproj==3.8.0
 cfgrib==0.9.15.1
 eccodes==2.44.0
+copernicusmarine==2.4.1

@@ -128,6 +128,12 @@ The opt-in `noaa_gfs` adapter requests a small, variable-filtered window from NO
 
 Set `KURMESH_ENVIRONMENT_PROVIDERS=noaa_gfs`, enable `KURMESH_ENVIRONMENT_PROVIDER_NOAA_GFS_ENABLED`, and configure `KURMESH_ENVIRONMENT_PROVIDER_NOAA_GFS_ENDPOINT=https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl`. Docker Compose supplies that same public NOMADS endpoint by default, but non-Compose deployments must configure it explicitly. A six-hour freshness threshold is the default. The adapter selects the nearest grid cell containing all required values using great-circle distance. A configurable, bounded fallback uses `DEGRADED`; a request without a complete valid cell inside that radius is `UNAVAILABLE`. Provenance records the GFS run, forecast hour and valid time, requested and selected coordinates, source/normalised units, fallback information, and source checksum. The live test is opt-in only when provider name, enabled state, endpoint, and `KURMESH_RUN_LIVE_PROVIDER_TESTS=true` are all configured. For Docker Compose: `docker compose run --rm -e KURMESH_ENVIRONMENT_PROVIDERS=noaa_gfs -e KURMESH_ENVIRONMENT_PROVIDER_NOAA_GFS_ENABLED=true -e KURMESH_RUN_LIVE_PROVIDER_TESTS=true backend pytest -q -rs -m live_provider`.
 
+## Phase 4B-3 Copernicus Marine ocean conditions
+
+The opt-in `copernicus_marine_ocean` adapter uses the official Copernicus Marine Toolbox `subset()` API to request bounded subsets of `cmems_mod_glo_phy-cur_anfc_0.083deg_PT6H-i` (`uo`, `vo`) and `cmems_mod_glo_phy-thetao_anfc_0.083deg_PT6H-i` (`thetao`) in product `GLOBAL_ANALYSISFORECAST_PHY_001_024`. It selects the shallowest shared valid depth and returns current components, speed, and direction (the direction the current flows toward, clockwise from north), plus potential temperature normalised to °C. The endpoint is a required configured Copernicus service reference; the Toolbox performs the authenticated data access.
+
+Enable it with `KURMESH_ENVIRONMENT_PROVIDERS=copernicus_marine_ocean`, provider configuration from `.env.example`, and deployment-only `COPERNICUSMARINE_SERVICE_USERNAME` / `COPERNICUSMARINE_SERVICE_PASSWORD`. Credentials are never stored in source, logs, or provenance. Synthetic tests never contact Copernicus. Live access must be explicitly enabled and supplied with credentials. A bounded nearest-valid fallback is `DEGRADED`; lack of a valid shared location/depth is `UNAVAILABLE` without fabricated values.
+
 ## Repository layout
 
 - `frontend/`: React/Vite health dashboard and API health integration.
