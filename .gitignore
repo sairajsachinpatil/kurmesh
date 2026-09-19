@@ -15,3 +15,5 @@ models/*
 !models/.gitkeep
 data/*
 !data/.gitkeep
+
+*.tsbuildinfo
