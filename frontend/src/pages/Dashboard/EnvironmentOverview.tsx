@@ -1,0 +1,4 @@
+import { Card } from "../../components/ui/Card";
+import { StatusBadge } from "../../components/ui/StatusBadge";
+const categories = ["Sea Ice", "Weather", "Ocean", "Iceberg"];
+export function EnvironmentOverview() { return <section aria-labelledby="environment-title"><h3 id="environment-title" className="mb-3 text-xl font-bold">Environmental status</h3><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{categories.map((label) => <Card key={label}><div className="flex items-center justify-between gap-3"><h4 className="font-bold">{label}</h4><StatusBadge status="UNAVAILABLE" /></div><p className="mt-3 text-sm text-kurmesh-muted">Awaiting validated provider data.</p><p className="mt-2 border-t border-kurmesh-border pt-2 text-xs text-kurmesh-muted">Freshness and provenance unavailable.</p></Card>)}</div></section>; }
