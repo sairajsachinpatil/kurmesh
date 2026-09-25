@@ -1,3 +1,4 @@
+import math
 import uuid
 from datetime import datetime
 from typing import Any, Literal
@@ -7,6 +8,25 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 class Payload(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class IcebergDemoInferenceRequest(Payload):
+    """Frozen Phase 5F feature vector; callers must not submit raw positions."""
+
+    current_x_m: float
+    current_y_m: float
+    previous_dx_m: float
+    previous_dy_m: float
+    previous_delta_longitude_deg: float
+    day_of_year_sin: float
+    day_of_year_cos: float
+
+    @field_validator("current_x_m", "current_y_m", "previous_dx_m", "previous_dy_m", "previous_delta_longitude_deg", "day_of_year_sin", "day_of_year_cos")
+    @classmethod
+    def finite(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("must be finite")
+        return value
 
 
 class RegisterRequest(Payload):

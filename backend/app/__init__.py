@@ -4,11 +4,13 @@ from flask_cors import CORS
 
 from app.api.v1.health import health_blueprint
 from app.api.v1.application import api_blueprint
+from app.api.v1.ml_demo import ml_demo_blueprint
 from app.api.v1.workflow import workflow_blueprint
 from app.auth import ApiError
 from app.config import Settings
 from app.database import build_session_factory
 from app.logging import configure_logging
+from app.ml_demo.iceberg import IcebergDemoModelService
 
 
 def create_app(settings: Settings | None = None) -> Flask:
@@ -18,6 +20,11 @@ def create_app(settings: Settings | None = None) -> Flask:
     app = Flask(__name__)
     app.config["KURMESH_SETTINGS"] = settings
     app.config["KURMESH_SESSION_FACTORY"] = build_session_factory(settings.database_url)
+    # Load once during startup. An absent/corrupt artifact remains explicitly
+    # unavailable rather than preventing the rest of the application from serving.
+    app.extensions["kurmesh_demo_iceberg_model"] = IcebergDemoModelService.startup(
+        settings.demo_iceberg_model_artifact_path,
+    )
     CORS(app, resources={r"/api/*": {"origins": settings.cors_origins}})
     app.register_blueprint(health_blueprint, url_prefix="/api/v1/health")
 
@@ -27,7 +34,7 @@ def create_app(settings: Settings | None = None) -> Flask:
         # even when the request targets a blueprint rule. Route by the stable
         # API prefix so every application API request receives the same scoped
         # session, while dependency-free health probes remain session-free.
-        if request.path.startswith("/api/v1/") and not request.path.startswith("/api/v1/health"):
+        if request.path.startswith("/api/v1/") and not request.path.startswith(("/api/v1/health", "/api/v1/demo/ml/")):
             g.db = app.config["KURMESH_SESSION_FACTORY"]()
 
     @app.teardown_request
@@ -58,6 +65,7 @@ def create_app(settings: Settings | None = None) -> Flask:
 
     app.register_blueprint(api_blueprint, url_prefix="/api/v1")
     app.register_blueprint(workflow_blueprint, url_prefix="/api/v1")
+    app.register_blueprint(ml_demo_blueprint, url_prefix="/api/v1/demo/ml")
 
     @app.get("/api/v1")
     def api_root() -> dict[str, str]:

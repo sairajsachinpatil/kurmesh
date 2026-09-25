@@ -25,6 +25,7 @@ class Settings:
     cors_origins: list[str]
     auth_secret: str = ""
     environment_providers: tuple[ProviderConfiguration, ...] = ()
+    demo_iceberg_model_artifact_path: str | None = None
 
     def validate(self) -> None:
         """Validate secrets needed by the authenticated application API.
@@ -77,4 +78,5 @@ class Settings:
             cors_origins=[item.strip() for item in os.environ.get("CORS_ORIGINS", "http://localhost").split(",")],
             auth_secret=os.environ.get("AUTH_SECRET", ""),
             environment_providers=providers,
+            demo_iceberg_model_artifact_path=os.environ.get("KURMESH_DEMO_ICEBERG_MODEL_ARTIFACT_PATH") or None,
         )
