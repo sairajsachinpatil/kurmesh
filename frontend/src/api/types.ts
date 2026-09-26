@@ -26,6 +26,14 @@ export interface Mission {
   departure_at: string | null;
 }
 
+export interface Vessel {
+  id: string;
+  name: string;
+  vessel_type: string;
+  imo_number: string | null;
+  specifications: Record<string, unknown>;
+}
+
 export interface EnvironmentObservation {
   id: string;
   source_id: string;
@@ -39,6 +47,14 @@ export interface EnvironmentObservation {
   valid_from: string | null;
   valid_to: string | null;
   location: { longitude: number; latitude: number } | null;
+}
+
+export interface EnvironmentSource {
+  id: string;
+  provider: string;
+  source: string;
+  url: string | null;
+  metadata: Record<string, unknown>;
 }
 
 export interface Prediction {
@@ -62,6 +78,21 @@ export interface RouteCandidate {
   environmental_snapshot: Record<string, unknown>;
   algorithm_version: string;
   metadata: Record<string, unknown>;
+}
+
+export interface Route {
+  id: string;
+  route_candidate_id: string;
+  status: string;
+  geometry: { type: "LineString"; coordinates: [number, number][] } | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface RouteReview {
+  id: string;
+  route_id: string;
+  decision: "APPROVED" | "REJECTED" | "CHANGES_REQUESTED";
+  comments: string | null;
 }
 
 export interface MissionAlert {

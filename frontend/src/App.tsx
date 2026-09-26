@@ -1,6 +1,8 @@
+import { useLocation } from "react-router-dom";
 import { AppRoutes } from "./app/routes";
 import { AppShell } from "./components/layout/AppShell";
 
 export function App() {
-  return <AppShell><AppRoutes /></AppShell>;
+  const location = useLocation();
+  return location.pathname === "/login" ? <AppRoutes /> : <AppShell><AppRoutes /></AppShell>;
 }

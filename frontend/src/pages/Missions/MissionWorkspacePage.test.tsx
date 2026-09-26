@@ -1,16 +1,80 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MissionWorkspacePage } from "./MissionWorkspacePage";
 
-vi.mock("../../components/map/OperationalMap", () => ({ OperationalMap: ({ routes, selectedRouteId }: { routes: { id: string }[]; selectedRouteId?: string }) => <div aria-label="Operational map">Routes: {routes.map((route) => route.id).join(",")} Selected: {selectedRouteId ?? "none"}</div> }));
-function response(body: unknown, status = 200) { return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }); }
-function renderWorkspace() { return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><MissionWorkspacePage /></QueryClientProvider>); }
-beforeEach(() => { localStorage.setItem("kurmesh.accessToken", "test-token"); });
+vi.mock("../../components/map/OperationalMap", () => ({ OperationalMap: () => <div aria-label="Operational map" /> }));
+
+const vessel = { id: "vessel-1", name: "RV Aurora", vessel_type: "Research vessel", imo_number: null, specifications: { ice_class: "PC5" } };
+const mission = { id: "mission-1", name: "Weddell research mission", state: "DRAFT", vessel_id: vessel.id, departure_at: "2026-01-10T09:00:00Z" };
+const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+
+function renderWorkspace() {
+  return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><MissionWorkspacePage /></QueryClientProvider>);
+}
+
+function installApi({ missions = [] as typeof mission[], vessels = [] as typeof vessel[], onPostMission, onPostVessel }: { missions?: typeof mission[]; vessels?: typeof vessel[]; onPostMission?: () => Response; onPostVessel?: () => Response } = {}) {
+  vi.stubGlobal("fetch", vi.fn((input: string, init?: RequestInit) => {
+    if (input.endsWith("/missions") && init?.method === "POST") return Promise.resolve(onPostMission?.() ?? response(mission, 201));
+    if (input.endsWith("/vessels") && init?.method === "POST") return Promise.resolve(onPostVessel?.() ?? response(vessel, 201));
+    if (input.endsWith("/missions")) return Promise.resolve(response({ items: missions }));
+    if (input.endsWith("/vessels")) return Promise.resolve(response({ items: vessels }));
+    if (input.endsWith("/environment/observations") || input.endsWith("/environment/sources")) return Promise.resolve(response({ items: [] }));
+    if (input.includes("/route-candidates") || input.includes("/routes") || input.includes("/alerts")) return Promise.resolve(response({ items: [] }));
+    return Promise.reject(new Error(`Unexpected request: ${input}`));
+  }));
+}
+
+beforeEach(() => localStorage.setItem("kurmesh.accessToken", "test-token"));
 afterEach(() => { cleanup(); localStorage.clear(); vi.unstubAllGlobals(); });
+
 describe("MissionWorkspacePage", () => {
-  it("selects a mission, compares actual candidates, shows alerts, and has no approval controls", async () => { vi.stubGlobal("fetch", vi.fn((input: string) => { if (input.endsWith("/missions")) return Promise.resolve(response({ items: [{ id: "mission-1", name: "Mission One", state: "PLANNING", vessel_id: null, departure_at: null }, { id: "mission-2", name: "Mission Two", state: "ROUTES_AVAILABLE", vessel_id: "vessel-2", departure_at: "2026-01-01T00:00:00Z" }] })); if (input.includes("mission-1/route-candidates")) return Promise.resolve(response({ items: [] })); if (input.includes("mission-1/alerts")) return Promise.resolve(response({ items: [] })); if (input.includes("mission-2/route-candidates")) return Promise.resolve(response({ items: [{ id: "route-2", mission_id: "mission-2", prediction_id: null, version: 2, status: "READY", geometry: { type: "LineString", coordinates: [[10, -70], [20, -72]] }, distance_nm: 15, estimated_duration_hours: 3, risk_score: 0.2, risk_components: { source: "backend" }, environmental_snapshot: {}, algorithm_version: "v1", metadata: {} }, { id: "route-3", mission_id: "mission-2", prediction_id: null, version: 3, status: "DRAFT", geometry: null, distance_nm: null, estimated_duration_hours: null, risk_score: null, risk_components: {}, environmental_snapshot: {}, algorithm_version: "v1", metadata: {} }] })); if (input.includes("mission-2/alerts")) return Promise.resolve(response({ items: [{ id: "alert-1", mission_id: "mission-2", severity: "HIGH", category: "NAVIGATION", title: "Observed alert", message: "Backend message", status: "OPEN", acknowledged_at: null }] })); return Promise.reject(new Error(`Unexpected request: ${input}`)); })); renderWorkspace(); expect((await screen.findAllByText("Mission One")).length).toBeGreaterThan(0); fireEvent.click(screen.getByRole("button", { name: /Mission Two/ })); expect(await screen.findByText("15 nautical miles")).toBeInTheDocument(); expect(screen.getByText("Observed alert")).toBeInTheDocument(); fireEvent.click(screen.getAllByRole("button", { name: "View route" })[0]); expect(await screen.findByText("route-2")).toBeInTheDocument(); expect(screen.getByLabelText("Operational map")).toHaveTextContent("route-2,route-3"); expect(screen.queryByRole("button", { name: /approve|reject|review/i })).not.toBeInTheDocument(); expect(screen.getByText("Route governance")).toBeInTheDocument(); });
-  it("shows the backend empty-mission state", async () => { vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({ items: [] }))); renderWorkspace(); expect(await screen.findByText("No missions available")).toBeInTheDocument(); });
-  it("shows a mission API error without rendering fabricated missions", async () => { vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({ error: { code: "INTERNAL_ERROR", message: "failed" } }, 500))); renderWorkspace(); expect(await screen.findByText("Mission data unavailable")).toBeInTheDocument(); expect(screen.queryByText("Antarctic Research Mission 01")).not.toBeInTheDocument(); });
+  it("shows the Antarctic mission empty state and create action", async () => {
+    installApi(); renderWorkspace();
+    expect(await screen.findByText("No missions available")).toBeInTheDocument();
+    expect(screen.getByText("Create an Antarctic research mission to begin environmental analysis and route planning.")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Create Mission" }).length).toBeGreaterThan(0);
+  });
+
+  it("creates a vessel with backend-provided data", async () => {
+    let currentVessels: typeof vessel[] = [];
+    installApi({ vessels: currentVessels, onPostVessel: () => { currentVessels = [vessel]; return response(vessel, 201); } }); renderWorkspace();
+    fireEvent.click(await screen.findByRole("button", { name: "Create Mission" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Create vessel" }));
+    fireEvent.change(screen.getByLabelText("Vessel name"), { target: { value: vessel.name } });
+    fireEvent.change(screen.getByLabelText("Vessel type"), { target: { value: vessel.vessel_type } });
+    fireEvent.change(screen.getByLabelText("Specifications"), { target: { value: JSON.stringify(vessel.specifications) } });
+    fireEvent.click(screen.getByRole("button", { name: "Create vessel" }));
+    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledWith(expect.stringContaining("/vessels"), expect.objectContaining({ method: "POST" })));
+    expect(await screen.findByRole("option", { name: "RV Aurora · Research vessel" })).toBeInTheDocument();
+  });
+
+  it("creates a mission and opens its mission workspace", async () => {
+    let currentMissions: typeof mission[] = [];
+    installApi({ vessels: [vessel], missions: currentMissions, onPostMission: () => { currentMissions = [mission]; return response(mission, 201); } }); renderWorkspace();
+    fireEvent.click(await screen.findByRole("button", { name: "Create Mission" }));
+    fireEvent.change(screen.getByLabelText("Mission name"), { target: { value: mission.name } });
+    fireEvent.change(screen.getByLabelText("Vessel"), { target: { value: vessel.id } });
+    fireEvent.change(screen.getByLabelText("Departure date and time"), { target: { value: "2026-01-10T09:00" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create mission" }));
+    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledWith(expect.stringContaining("/missions"), expect.objectContaining({ method: "POST" })));
+    expect(await screen.findByText("ACTIVE MISSION")).toBeInTheDocument();
+    expect(screen.getAllByText("Weddell research mission").length).toBeGreaterThan(0);
+    expect(screen.getByText("Mission ID")).toBeInTheDocument();
+    expect(screen.getByLabelText("Mission workflow progress")).toHaveTextContent("Environmental data");
+  });
+
+  it("shows existing backend mission details without invented route or approval controls", async () => {
+    installApi({ missions: [mission], vessels: [vessel] }); renderWorkspace();
+    expect(await screen.findByText("RV Aurora · Research vessel")).toBeInTheDocument();
+    expect(screen.getAllByText("Not yet generated").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: /approve|reject|review/i })).not.toBeInTheDocument();
+  });
+
+  it("shows a mission API error without rendering fabricated missions", async () => {
+    vi.stubGlobal("fetch", vi.fn((input: string) => input.endsWith("/missions") ? Promise.resolve(response({ error: { code: "INTERNAL_ERROR", message: "failed" } }, 500)) : Promise.resolve(response({ items: [] })))); renderWorkspace();
+    expect(await screen.findByText("Mission data unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("Antarctic Research Mission 01")).not.toBeInTheDocument();
+  });
 });
