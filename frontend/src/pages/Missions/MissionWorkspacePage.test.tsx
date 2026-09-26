@@ -3,11 +3,12 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import "@testing-library/jest-dom/vitest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MissionWorkspacePage } from "./MissionWorkspacePage";
+import type { Mission } from "../../api/types";
 
 vi.mock("../../components/map/OperationalMap", () => ({ OperationalMap: () => <div aria-label="Operational map" /> }));
 
 const vessel = { id: "vessel-1", name: "RV Aurora", vessel_type: "Research vessel", imo_number: null, specifications: { ice_class: "PC5" } };
-const mission = { id: "mission-1", name: "Weddell research mission", state: "DRAFT", vessel_id: vessel.id, departure_at: "2026-01-10T09:00:00Z" };
+const mission = { id: "mission-1", name: "Weddell research mission", state: "DRAFT", vessel_id: vessel.id, departure_at: "2026-01-10T09:00:00Z", origin: { latitude: -70, longitude: 10 }, destination: { latitude: -71, longitude: 12 } };
 const analyzingMission = { ...mission, state: "ANALYZING" };
 const candidate = { id: "candidate-1", mission_id: mission.id, prediction_id: null, version: 1, status: "READY", geometry: { type: "LineString" as const, coordinates: [[10, -70], [12, -71]] as [number, number][] }, distance_nm: 18, estimated_duration_hours: null, risk_score: null, risk_components: {}, environmental_snapshot: {}, algorithm_version: "prototype-risk-routing-v1", metadata: {} };
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -16,10 +17,11 @@ function renderWorkspace() {
   return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><MissionWorkspacePage /></QueryClientProvider>);
 }
 
-function installApi({ missions = [] as typeof mission[], vessels = [] as typeof vessel[], onPostMission, onPostVessel, onGenerate, generatedCandidates = [] as typeof candidate[] }: { missions?: typeof mission[]; vessels?: typeof vessel[]; onPostMission?: () => Response; onPostVessel?: () => Response; onGenerate?: () => Promise<Response> | Response; generatedCandidates?: typeof candidate[] } = {}) {
+function installApi({ missions = [] as Mission[], vessels = [] as typeof vessel[], onPostMission, onPostVessel, onPatchMission, onGenerate, generatedCandidates = [] as typeof candidate[] }: { missions?: Mission[]; vessels?: typeof vessel[]; onPostMission?: () => Response; onPostVessel?: () => Response; onPatchMission?: () => Response; onGenerate?: () => Promise<Response> | Response; generatedCandidates?: typeof candidate[] } = {}) {
   vi.stubGlobal("fetch", vi.fn((input: string, init?: RequestInit) => {
     if (input.endsWith("/missions") && init?.method === "POST") return Promise.resolve(onPostMission?.() ?? response(mission, 201));
     if (input.endsWith("/vessels") && init?.method === "POST") return Promise.resolve(onPostVessel?.() ?? response(vessel, 201));
+    if (input.endsWith(`/missions/${mission.id}`) && init?.method === "PATCH") return Promise.resolve(onPatchMission?.() ?? response(mission));
     if (input.endsWith("/route-candidates/generate") && init?.method === "POST") return Promise.resolve(onGenerate?.() ?? response({ mission_id: mission.id, candidate_count: generatedCandidates.length, candidates: generatedCandidates, algorithm_version: "prototype-risk-routing-v1", environment_status: [], warnings: [] }, 201));
     if (input.endsWith("/missions")) return Promise.resolve(response({ items: missions }));
     if (input.endsWith("/vessels")) return Promise.resolve(response({ items: vessels }));
@@ -61,7 +63,11 @@ describe("MissionWorkspacePage", () => {
     fireEvent.change(screen.getByLabelText("Mission name"), { target: { value: mission.name } });
     fireEvent.change(screen.getByLabelText("Vessel"), { target: { value: vessel.id } });
     fireEvent.change(screen.getByLabelText("Departure date and time"), { target: { value: "2026-01-10T09:00" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create mission" }));
+    fireEvent.change(screen.getByLabelText("Origin latitude"), { target: { value: "-70" } });
+    fireEvent.change(screen.getByLabelText("Origin longitude"), { target: { value: "10" } });
+    fireEvent.change(screen.getByLabelText("Destination latitude"), { target: { value: "-71" } });
+    fireEvent.change(screen.getByLabelText("Destination longitude"), { target: { value: "12" } });
+    fireEvent.submit(screen.getByRole("button", { name: "Create mission" }).closest("form")!);
     await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledWith(expect.stringContaining("/missions"), expect.objectContaining({ method: "POST" })));
     expect(await screen.findByText("ACTIVE MISSION")).toBeInTheDocument();
     expect(screen.getAllByText("Weddell research mission").length).toBeGreaterThan(0);
@@ -93,6 +99,25 @@ describe("MissionWorkspacePage", () => {
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).endsWith("/missions")).length).toBeGreaterThan(1));
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).endsWith("/route-candidates")).length).toBeGreaterThan(1));
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).endsWith("/routes")).length).toBeGreaterThan(1));
+  });
+
+  it("requires bounded coordinates before creating a mission", async () => {
+    installApi({ vessels: [vessel] }); renderWorkspace();
+    fireEvent.click(await screen.findByRole("button", { name: "Create Mission" }));
+    expect(screen.getByLabelText("Origin latitude")).toHaveAttribute("min", "-90");
+    expect(screen.getByLabelText("Origin latitude")).toHaveAttribute("max", "90");
+    expect(screen.getByLabelText("Destination longitude")).toHaveAttribute("min", "-180");
+    expect(screen.getByLabelText("Destination longitude")).toHaveAttribute("max", "180");
+  });
+
+  it("saves missing coordinates for an existing mission and enables generation", async () => {
+    const withoutCoordinates = { ...analyzingMission, origin: null, destination: null };
+    installApi({ missions: [withoutCoordinates], vessels: [vessel], onPatchMission: () => response(analyzingMission) }); renderWorkspace();
+    const generate = await screen.findByRole("button", { name: "Generate Route Options" }); expect(generate).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Edit coordinates" }));
+    fireEvent.change(screen.getByLabelText("Edit origin latitude"), { target: { value: "-70" } }); fireEvent.change(screen.getByLabelText("Edit origin longitude"), { target: { value: "10" } }); fireEvent.change(screen.getByLabelText("Edit destination latitude"), { target: { value: "-71" } }); fireEvent.change(screen.getByLabelText("Edit destination longitude"), { target: { value: "12" } }); fireEvent.click(screen.getByRole("button", { name: "Save coordinates" }));
+    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledWith(expect.stringContaining(`/missions/${mission.id}`), expect.objectContaining({ method: "PATCH" })));
+    expect(await screen.findByRole("button", { name: "Generate Route Options" })).not.toBeDisabled();
   });
 
   it("displays a backend route-generation error", async () => {

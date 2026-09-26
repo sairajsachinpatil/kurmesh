@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 
 class Payload(BaseModel):
@@ -47,16 +47,37 @@ class VesselRequest(Payload):
     specifications: dict[str, Any] = Field(default_factory=dict)
 
 
+class PointLocation(Payload):
+    longitude: float = Field(ge=-180, le=180)
+    latitude: float = Field(ge=-90, le=90)
+
+
 class MissionCreateRequest(Payload):
     name: str = Field(min_length=1, max_length=200)
     vessel_id: uuid.UUID | None = None
     departure_at: datetime | None = None
+    origin: PointLocation | None = None
+    destination: PointLocation | None = None
+
+    @model_validator(mode="after")
+    def paired_coordinates(self):
+        if (self.origin is None) != (self.destination is None):
+            raise ValueError("origin and destination must be provided together")
+        return self
 
 
 class MissionUpdateRequest(Payload):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     vessel_id: uuid.UUID | None = None
     departure_at: datetime | None = None
+    origin: PointLocation | None = None
+    destination: PointLocation | None = None
+
+    @model_validator(mode="after")
+    def paired_coordinates(self):
+        if (self.origin is None) != (self.destination is None):
+            raise ValueError("origin and destination must be provided together")
+        return self
 
 
 class MissionTransitionRequest(Payload):
@@ -95,11 +116,6 @@ class EnvironmentSourceUpdateRequest(Payload):
     source: str | None = Field(default=None, min_length=1, max_length=200)
     url: str | None = Field(default=None, max_length=2000)
     metadata: dict[str, Any] | None = None
-
-
-class PointLocation(Payload):
-    longitude: float = Field(ge=-180, le=180)
-    latitude: float = Field(ge=-90, le=90)
 
 
 class EnvironmentObservationCreateRequest(Payload):

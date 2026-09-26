@@ -1,6 +1,6 @@
 import type { ApiErrorBody } from "./types";
 
-const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "/api/v1").replace(/\/$/, "");
+export const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "/api/v1").replace(/\/$/, "");
 export const ACCESS_TOKEN_STORAGE_KEY = "kurmesh.accessToken";
 
 export class ApiError extends Error {
@@ -37,6 +37,17 @@ export async function apiPost<T>(path: string, body: unknown, options: { signal?
   const token = options.authenticated ? window.localStorage.getItem(ACCESS_TOKEN_STORAGE_KEY) : null;
   const response = await fetch(`${apiBaseUrl}${path}`, {
     method: "POST",
+    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify(body),
+    signal: options.signal,
+  });
+  return parseResponse<T>(response);
+}
+
+export async function apiPatch<T>(path: string, body: unknown, options: { signal?: AbortSignal; authenticated?: boolean } = {}): Promise<T> {
+  const token = options.authenticated ? window.localStorage.getItem(ACCESS_TOKEN_STORAGE_KEY) : null;
+  const response = await fetch(`${apiBaseUrl}${path}`, {
+    method: "PATCH",
     headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: JSON.stringify(body),
     signal: options.signal,

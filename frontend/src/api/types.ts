@@ -24,6 +24,13 @@ export interface Mission {
   state: string;
   vessel_id: string | null;
   departure_at: string | null;
+  origin?: Coordinate | null;
+  destination?: Coordinate | null;
+}
+
+export interface Coordinate {
+  longitude: number;
+  latitude: number;
 }
 
 export interface Vessel {

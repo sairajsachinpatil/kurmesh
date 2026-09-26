@@ -39,10 +39,17 @@ def page(query, model, filters=()):
     return jsonify({"items": [serialize(row) for row in rows], "limit": limit, "offset": offset})
 
 
+def _mission_location(geometry):
+    if geometry is None:
+        return None
+    longitude, latitude = g.db.execute(select(func.ST_X(geometry), func.ST_Y(geometry))).one()
+    return {"longitude": longitude, "latitude": latitude}
+
+
 def serialize(value):
     if isinstance(value, User): return {"id": str(value.id), "email": value.email, "full_name": value.full_name, "is_active": value.is_active, "roles": [r.name for r in value.roles]}
     if isinstance(value, Vessel): return {"id": str(value.id), "name": value.name, "vessel_type": value.vessel_type, "imo_number": value.imo_number, "specifications": value.specifications}
-    if isinstance(value, Mission): return {"id": str(value.id), "name": value.name, "state": value.state, "vessel_id": str(value.vessel_id) if value.vessel_id else None, "departure_at": value.departure_at.isoformat() if value.departure_at else None}
+    if isinstance(value, Mission): return {"id": str(value.id), "name": value.name, "state": value.state, "vessel_id": str(value.vessel_id) if value.vessel_id else None, "departure_at": value.departure_at.isoformat() if value.departure_at else None, "origin": _mission_location(value.origin), "destination": _mission_location(value.destination)}
     if isinstance(value, MissionConstraint): return {"id": str(value.id), "mission_id": str(value.mission_id), "constraint_type": value.constraint_type, "value": value.value}
     if isinstance(value, Route): return {"id": str(value.id), "route_candidate_id": str(value.route_candidate_id), "status": value.status}
     if isinstance(value, RouteCandidate): return {"id": str(value.id), "mission_id": str(value.mission_id), "version": value.version, "status": "UNAVAILABLE", "reason": "Route geometry is only created by the routing subsystem"}
@@ -180,7 +187,11 @@ def missions():
     data = body(MissionCreateRequest)
     if data.vessel_id is not None and g.db.get(Vessel, data.vessel_id) is None:
         raise ApiError("VESSEL_NOT_FOUND", "Vessel not found", 404)
-    mission = Mission(**data.model_dump(), created_by_id=user.id); g.db.add(mission); commit(); audit("MISSION_CREATED", "Mission", mission.id); commit()
+    values = data.model_dump(exclude={"origin", "destination"})
+    mission = Mission(**values, created_by_id=user.id,
+        origin=WKTElement(f"POINT({data.origin.longitude} {data.origin.latitude})", srid=4326) if data.origin else None,
+        destination=WKTElement(f"POINT({data.destination.longitude} {data.destination.latitude})", srid=4326) if data.destination else None)
+    g.db.add(mission); commit(); audit("MISSION_CREATED", "Mission", mission.id); commit()
     return jsonify(serialize(mission)), 201
 
 
@@ -194,7 +205,11 @@ def mission(mission_id):
     data = body(MissionUpdateRequest)
     if data.vessel_id is not None and g.db.get(Vessel, data.vessel_id) is None:
         raise ApiError("VESSEL_NOT_FOUND", "Vessel not found", 404)
-    for key, value in data.model_dump(exclude_unset=True).items(): setattr(entity, key, value)
+    values = data.model_dump(exclude_unset=True, exclude={"origin", "destination"})
+    for key, value in values.items(): setattr(entity, key, value)
+    if data.origin is not None and data.destination is not None:
+        entity.origin = WKTElement(f"POINT({data.origin.longitude} {data.origin.latitude})", srid=4326)
+        entity.destination = WKTElement(f"POINT({data.destination.longitude} {data.destination.latitude})", srid=4326)
     commit(); audit("MISSION_UPDATED", "Mission", mission_id); commit(); return jsonify(serialize(entity))
 
 

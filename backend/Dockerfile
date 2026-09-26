@@ -8,4 +8,4 @@ COPY ml/ /app/ml
 RUN useradd --create-home --uid 10001 appuser && chown -R appuser:appuser /app
 USER appuser
 EXPOSE 8000
-CMD ["sh", "-c", "alembic upgrade head && gunicorn --bind 0.0.0.0:8000 --workers 2 --access-logfile - --error-logfile - app.wsgi:app"]
+CMD ["sh", "-c", "alembic upgrade head && python -m app.demo_seed && gunicorn --bind 0.0.0.0:8000 --workers 2 --access-logfile - --error-logfile - app.wsgi:app"]
