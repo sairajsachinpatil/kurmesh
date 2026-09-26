@@ -13,6 +13,9 @@ from app.api.v1.schemas import (AlertAcknowledgeRequest, AlertCreateRequest, Gov
     RouteCreateRequest, RouteUpdateRequest)
 from app.auth import ApiError, authenticate
 from app.models import Alert, AuditEvent, Mission, Prediction, ProvenanceRecord, Route, RouteApproval, RouteCandidate, RouteReview
+from app.api.v1.application import TRANSITIONS
+from app.routing.generator import ALGORITHM_VERSION
+from app.routing.service import generate_candidates
 
 workflow_blueprint = Blueprint("workflow", __name__)
 
@@ -84,6 +87,43 @@ def _paginate(query, serializer):
     try: limit, offset = min(max(int(request.args.get("limit", 50)), 1), 100), max(int(request.args.get("offset", 0)), 0)
     except ValueError: raise ApiError("VALIDATION_ERROR", "limit and offset must be integers", 422) from None
     return jsonify({"items": [serializer(x) for x in g.db.scalars(query.limit(limit).offset(offset))], "limit": limit, "offset": offset})
+
+
+@workflow_blueprint.post("/missions/<uuid:mission_id>/route-candidates/generate")
+def generate_route_candidates(mission_id):
+    """Generate deterministic candidates; selection and approval remain human actions."""
+    user = authenticate(g.db)
+    mission = g.db.scalar(select(Mission).where(Mission.id == mission_id).with_for_update())
+    if mission is None:
+        raise ApiError("MISSION_NOT_FOUND", "Mission not found", 404)
+    if not _owner(mission, user):
+        raise ApiError("FORBIDDEN", "Mission ownership is required", 403)
+    request_body = request.get_json(silent=True)
+    if request_body not in (None, {}):
+        raise ApiError("VALIDATION_ERROR", "Route candidate generation does not accept request fields", 422)
+    if mission.state not in {"ANALYZING", "ROUTES_AVAILABLE"}:
+        raise ApiError("INVALID_MISSION_STATE", "Route candidates can be generated only while ANALYZING or after routes are available", 409)
+    try:
+        candidates, warnings = generate_candidates(g.db, mission)
+    except ValueError as exc:
+        raise ApiError("INVALID_MISSION_GEOMETRY", str(exc), 422) from exc
+    # Reuse the established mission transition table. Re-generation is allowed
+    # only after a prior successful transition and never bypasses review.
+    if mission.state == "ANALYZING":
+        if "ROUTES_AVAILABLE" not in TRANSITIONS[mission.state]:
+            raise ApiError("INVALID_STATE_TRANSITION", "Mission cannot transition to ROUTES_AVAILABLE", 409)
+        mission.state = "ROUTES_AVAILABLE"
+        _audit("MISSION_TRANSITIONED", "Mission", mission.id, {"state": "ROUTES_AVAILABLE", "reason": "route_candidates_generated"})
+    for candidate in candidates:
+        _audit("ROUTE_CANDIDATE_GENERATED", "RouteCandidate", candidate.id, {"algorithm_version": ALGORITHM_VERSION, "route_type": candidate.metadata_json["route_type"]})
+    _commit()
+    return jsonify({
+        "mission_id": str(mission.id), "candidate_count": len(candidates),
+        "candidates": [_candidate_payload(candidate) for candidate in candidates],
+        "algorithm_version": ALGORITHM_VERSION,
+        "environment_status": [candidate.risk_components.get("availability", "UNAVAILABLE") for candidate in candidates],
+        "warnings": warnings,
+    }), 201
 
 
 @workflow_blueprint.route("/missions/<uuid:mission_id>/route-candidates", methods=["GET", "POST"])

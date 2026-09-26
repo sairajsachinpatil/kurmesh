@@ -16,11 +16,18 @@ def test_application_blueprint_is_registered():
     paths = {rule.rule for rule in app.url_map.iter_rules()}
     assert "/api/v1/auth/login" in paths
     assert "/api/v1/missions" in paths
+    assert "/api/v1/missions/<uuid:mission_id>/route-candidates/generate" in paths
     assert "/api/v1/health/live" in paths
 
 
 def test_protected_route_returns_json_authentication_error():
     response = create_app(settings()).test_client().get("/api/v1/missions")
+    assert response.status_code == 401
+    assert response.json["error"]["code"] == "UNAUTHENTICATED"
+
+
+def test_route_generation_endpoint_requires_authentication():
+    response = create_app(settings()).test_client().post("/api/v1/missions/11111111-1111-1111-1111-111111111111/route-candidates/generate", json={})
     assert response.status_code == 401
     assert response.json["error"]["code"] == "UNAUTHENTICATED"
 
