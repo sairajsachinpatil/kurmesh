@@ -88,6 +88,15 @@ export interface Route {
   metadata: Record<string, unknown>;
 }
 
+export interface RouteCandidateGenerationResponse {
+  mission_id: string;
+  candidate_count: number;
+  candidates: RouteCandidate[];
+  algorithm_version: string;
+  environment_status: string[];
+  warnings: string[];
+}
+
 export interface RouteReview {
   id: string;
   route_id: string;

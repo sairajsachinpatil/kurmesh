@@ -8,20 +8,24 @@ vi.mock("../../components/map/OperationalMap", () => ({ OperationalMap: () => <d
 
 const vessel = { id: "vessel-1", name: "RV Aurora", vessel_type: "Research vessel", imo_number: null, specifications: { ice_class: "PC5" } };
 const mission = { id: "mission-1", name: "Weddell research mission", state: "DRAFT", vessel_id: vessel.id, departure_at: "2026-01-10T09:00:00Z" };
+const analyzingMission = { ...mission, state: "ANALYZING" };
+const candidate = { id: "candidate-1", mission_id: mission.id, prediction_id: null, version: 1, status: "READY", geometry: { type: "LineString" as const, coordinates: [[10, -70], [12, -71]] as [number, number][] }, distance_nm: 18, estimated_duration_hours: null, risk_score: null, risk_components: {}, environmental_snapshot: {}, algorithm_version: "prototype-risk-routing-v1", metadata: {} };
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
 function renderWorkspace() {
   return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><MissionWorkspacePage /></QueryClientProvider>);
 }
 
-function installApi({ missions = [] as typeof mission[], vessels = [] as typeof vessel[], onPostMission, onPostVessel }: { missions?: typeof mission[]; vessels?: typeof vessel[]; onPostMission?: () => Response; onPostVessel?: () => Response } = {}) {
+function installApi({ missions = [] as typeof mission[], vessels = [] as typeof vessel[], onPostMission, onPostVessel, onGenerate, generatedCandidates = [] as typeof candidate[] }: { missions?: typeof mission[]; vessels?: typeof vessel[]; onPostMission?: () => Response; onPostVessel?: () => Response; onGenerate?: () => Promise<Response> | Response; generatedCandidates?: typeof candidate[] } = {}) {
   vi.stubGlobal("fetch", vi.fn((input: string, init?: RequestInit) => {
     if (input.endsWith("/missions") && init?.method === "POST") return Promise.resolve(onPostMission?.() ?? response(mission, 201));
     if (input.endsWith("/vessels") && init?.method === "POST") return Promise.resolve(onPostVessel?.() ?? response(vessel, 201));
+    if (input.endsWith("/route-candidates/generate") && init?.method === "POST") return Promise.resolve(onGenerate?.() ?? response({ mission_id: mission.id, candidate_count: generatedCandidates.length, candidates: generatedCandidates, algorithm_version: "prototype-risk-routing-v1", environment_status: [], warnings: [] }, 201));
     if (input.endsWith("/missions")) return Promise.resolve(response({ items: missions }));
     if (input.endsWith("/vessels")) return Promise.resolve(response({ items: vessels }));
     if (input.endsWith("/environment/observations") || input.endsWith("/environment/sources")) return Promise.resolve(response({ items: [] }));
-    if (input.includes("/route-candidates") || input.includes("/routes") || input.includes("/alerts")) return Promise.resolve(response({ items: [] }));
+    if (input.includes("/route-candidates")) return Promise.resolve(response({ items: generatedCandidates }));
+    if (input.includes("/routes") || input.includes("/alerts")) return Promise.resolve(response({ items: [] }));
     return Promise.reject(new Error(`Unexpected request: ${input}`));
   }));
 }
@@ -70,6 +74,31 @@ describe("MissionWorkspacePage", () => {
     expect(await screen.findByText("RV Aurora · Research vessel")).toBeInTheDocument();
     expect(screen.getAllByText("Not yet generated").length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: /approve|reject|review/i })).not.toBeInTheDocument();
+  });
+
+  it("shows explicit route generation for an active mission without generating on page load", async () => {
+    installApi({ missions: [analyzingMission], vessels: [vessel] }); renderWorkspace();
+    expect(await screen.findByRole("button", { name: "Generate Route Options" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Mission workflow progress")).toHaveTextContent("Awaiting analysis");
+    expect(vi.mocked(fetch).mock.calls.some(([input, init]) => String(input).endsWith("/route-candidates/generate") && (init as RequestInit | undefined)?.method === "POST")).toBe(false);
+  });
+
+  it("shows route-generation loading and refetches mission, candidates, and governed routes on success", async () => {
+    let resolveGeneration: (value: Response) => void = () => undefined;
+    installApi({ missions: [analyzingMission], vessels: [vessel], generatedCandidates: [candidate], onGenerate: () => new Promise<Response>((resolve) => { resolveGeneration = resolve; }) }); renderWorkspace();
+    fireEvent.click(await screen.findByRole("button", { name: "Generate Route Options" }));
+    expect(await screen.findByText("Generating route options...")).toBeInTheDocument();
+    resolveGeneration(response({ mission_id: mission.id, candidate_count: 1, candidates: [candidate], algorithm_version: "prototype-risk-routing-v1", environment_status: ["UNAVAILABLE"], warnings: [] }, 201));
+    expect(await screen.findByText("1 route option generated.")).toBeInTheDocument();
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).endsWith("/missions")).length).toBeGreaterThan(1));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).endsWith("/route-candidates")).length).toBeGreaterThan(1));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).endsWith("/routes")).length).toBeGreaterThan(1));
+  });
+
+  it("displays a backend route-generation error", async () => {
+    installApi({ missions: [analyzingMission], vessels: [vessel], onGenerate: () => response({ error: { code: "INVALID_MISSION_STATE", message: "Mission is not analyzing" } }, 409) }); renderWorkspace();
+    fireEvent.click(await screen.findByRole("button", { name: "Generate Route Options" }));
+    expect(await screen.findByText("Mission is not analyzing")).toBeInTheDocument();
   });
 
   it("shows a mission API error without rendering fabricated missions", async () => {
